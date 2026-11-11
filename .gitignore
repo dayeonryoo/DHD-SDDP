@@ -39,3 +39,6 @@ examples/*.png
 # Files written by the test suite
 test/*.log
 test/*.cuts.json
+
+# macOS Finder metadata
+.DS_Store
