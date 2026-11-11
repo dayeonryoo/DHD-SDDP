@@ -30,3 +30,12 @@ JuliaLocalPreferences.toml
 
 # Conda environment and metadata created in the project directory by the CondaPkg package
 .CondaPkg/
+
+# Results of running the SDDP.jl package examples
+examples/*.log
+examples/*.html
+examples/*.png
+
+# Files written by the test suite
+test/*.log
+test/*.cuts.json

@@ -24,5 +24,4 @@ end
 
 @testset "SDDP.jl" begin
     util_test_directory(".", ["runtests.jl"])
-    util_test_directory(joinpath(dirname(@__DIR__), "docs", "src", "examples"))
 end
