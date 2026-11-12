@@ -56,6 +56,7 @@ include("plugins/forward_passes.jl")
 
 # Decision-hazard-decision nodes.
 include("dhd/here_and_now.jl")
+include("dhd/joint_subproblem.jl")
 
 # Visualization related code.
 include("visualization/publication_plot.jl")

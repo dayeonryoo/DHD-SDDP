@@ -1008,6 +1008,10 @@ function PolicyGraph(
         if length(node.noise_terms) == 0
             push!(node.noise_terms, Noise(nothing, 1.0))
         end
+
+        # Expand to DHD.
+        _expand_to_dhd!(node, optimizer, direct_mode)
+
         ctypes = JuMP.list_of_constraint_types(subproblem)
         node.has_integrality =
             (JuMP.VariableRef, MOI.Integer) in ctypes ||
@@ -1042,6 +1046,9 @@ function PolicyGraph(
     end
     # Initialize belief states.
     if length(graph.belief_partition) > 0
+        if any(is_dhd, values(policy_graph.nodes))
+            error("Belief states are not supported for DHD nodes.")
+        end
         initialize_belief_states(policy_graph, graph)
     end
     return policy_graph

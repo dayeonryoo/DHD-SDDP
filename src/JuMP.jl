@@ -116,6 +116,11 @@ function JuMP.set_optimizer(model::SDDP.PolicyGraph, optimizer)
         set_optimizer(node.subproblem, optimizer)
         node.optimizer = optimizer
         set_silent(node.subproblem)
+
+        if is_dhd(node)
+            set_optimizer(node.dhd.joint, optimizer)
+            set_silent(node.dhd.joint)
+        end
     end
     return
 end
