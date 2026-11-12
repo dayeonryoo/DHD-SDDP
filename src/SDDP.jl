@@ -54,6 +54,9 @@ include("plugins/parallel_schemes.jl")
 include("plugins/backward_sampling_schemes.jl")
 include("plugins/forward_passes.jl")
 
+# Decision-hazard-decision nodes.
+include("dhd/here_and_now.jl")
+
 # Visualization related code.
 include("visualization/publication_plot.jl")
 include("visualization/spaghetti_plot.jl")
