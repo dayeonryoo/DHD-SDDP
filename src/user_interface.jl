@@ -658,6 +658,10 @@ mutable struct Node{T}
     lock::ReentrantLock
     # (lower, upper, is_integer)
     incoming_state_bounds::Dict{Symbol,Tuple{Float64,Float64,Bool}}
+    # Here-and-now variables. Empty for HD nodes.
+    here_and_now::Vector{JuMP.VariableRef}
+    # DHD data. Empty for HD nodes.
+    dhd::Any
 end
 
 function Base.show(io::IO, node::Node)
@@ -991,6 +995,10 @@ function PolicyGraph(
             Dict{Symbol,Any}(),
             ReentrantLock(),
             Dict{Symbol,Tuple{Float64,Float64,Bool}}(),
+            # Here-and-now variables. Empty for HD nodes.
+            JuMP.VariableRef[],
+            # DHD data. Empty for HD nodes.
+            nothing
         )
         subproblem.ext[:sddp_policy_graph] = policy_graph
         policy_graph.nodes[node_index] = subproblem.ext[:sddp_node] = node
