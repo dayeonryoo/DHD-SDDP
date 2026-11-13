@@ -15,6 +15,14 @@ end
 "Return true if `node` has here-and-now variables."
 is_dhd(node::Node) = node.dhd !== nothing
 
+"Error if `model` has DHD nodes since `fname` does not support them yet."
+function _throw_if_dhd(model::PolicyGraph, fname::String)
+    if any(is_dhd, values(model.nodes))
+        error("`SDDP.$fname` does not support DHD nodes yet.")
+    end
+    return
+end
+
 "Return true if `f` contains only first-stage variables."
 _is_first_stage(f::Real, first_stage) = true
 

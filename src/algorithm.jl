@@ -890,6 +890,9 @@ function calculate_bound(
     root_state::Dict{Symbol,Float64} = model.initial_root_state;
     risk_measure::AbstractRiskMeasure = Expectation(),
 ) where {T}
+
+    _throw_if_dhd(model, "calculate_bound")
+
     # Initialization.
     noise_supports = Any[]
     probabilities = Float64[]
@@ -1149,6 +1152,8 @@ function train(
     forward_pass_callback::Function = (x) -> nothing,
     post_iteration_callback = result -> nothing,
 )
+    _throw_if_dhd(model, "train")
+
     if any(node -> node.objective_state !== nothing, values(model.nodes))
         # FIXME(odow): Threaded is broken for objective states
         parallel_scheme = Serial()
@@ -1556,6 +1561,8 @@ function simulate(
     parallel_scheme::AbstractParallelScheme = Serial(),
     incoming_state::Dict{String,Float64} = _initial_state(model),
 )
+    _throw_if_dhd(model, "simulate")
+
     return _simulate(
         model,
         parallel_scheme,
@@ -1609,6 +1616,7 @@ struct DecisionRule{T}
     model::PolicyGraph{T}
     node::Node{T}
     function DecisionRule(model::PolicyGraph{T}; node::T) where {T}
+        _throw_if_dhd(model, "DecisionRule")
         return new{T}(model, model[node])
     end
 end

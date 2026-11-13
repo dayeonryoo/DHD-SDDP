@@ -209,6 +209,9 @@ function deterministic_equivalent(
     optimizer = nothing;
     time_limit::Union{Real,Nothing} = 60.0,
 ) where {T}
+
+    _throw_if_dhd(pg, "deterministic_equivalent") # Error: does not support DHD yet
+
     # Step 0: helper function for the time limit.
     start_time = time()
     time_limit = time_limit === nothing ? typemax(Float64) : Float64(time_limit)
