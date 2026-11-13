@@ -1,8 +1,9 @@
-"One noise copy in the joint model: its noise, variable map and stage cost."
-struct RecourseCopy
+"One noise copy in the joint model: its noise, variable map, stage cost and cost-to-go."
+mutable struct RecourseCopy
     noise::Noise
     variables::Dict{JuMP.VariableRef,JuMP.VariableRef}
     stage_objective::Any
+    theta::Union{Nothing,JuMP.VariableRef}
 end
 
 "Joint subproblem of a DHD node."
@@ -109,13 +110,9 @@ function _expand_to_dhd!(node::Node, optimizer, direct_mode::Bool)
             end
         end
         C = copy_and_replace_variables(node.stage_objective, variables)
-        push!(recourse_copies, RecourseCopy(noise, variables, C))
+        push!(recourse_copies, RecourseCopy(noise, variables, C, nothing))
     end
 
-    JuMP.set_objective_function(
-        joint,
-        sum(c.noise.probability * c.stage_objective for c in recourse_copies),
-    )
     node.dhd = DHDData(joint, first_stage, recourse_copies)
     return
 end

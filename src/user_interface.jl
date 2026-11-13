@@ -1029,6 +1029,8 @@ function PolicyGraph(
         # Intialize the bellman function. (See note in creation of Node above.)
         node.bellman_function =
             initialize_bellman_function(bellman_function, policy_graph, node)
+        # Add a cost-to-go variable to each DHD recourse copy.
+        _initialize_dhd_bellman_function!(node)
     end
     # Add root nodes
     for (child, probability) in graph.nodes[graph.root_node]

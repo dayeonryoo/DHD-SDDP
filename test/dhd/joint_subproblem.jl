@@ -19,13 +19,13 @@ end
 function _small_model(; Ω = [1.0, 2.0, 3.0])
     return SDDP.LinearPolicyGraph(; stages = 1, lower_bound = 0.0) do sp, t
         @variable(sp, 0 <= x <= 10, SDDP.State, initial_value = 5.0)
-        @variable(sp, 0 <= u_b <= 4, SDDP.HereAndNow)
-        @variable(sp, u_a >= 0)
+        @variable(sp, 0 <= ub <= 4, SDDP.HereAndNow)
+        @variable(sp, ua >= 0)
         @variable(sp, w)
-        @constraint(sp, u_b <= x.in)
-        @constraint(sp, x.out == x.in + u_a + u_b - w)
+        @constraint(sp, ub <= x.in)
+        @constraint(sp, x.out == x.in + ua + ub - w)
         SDDP.parameterize(ω -> fix(w, ω), sp, Ω)
-        @stageobjective(sp, 2 * u_b + 3 * u_a)
+        @stageobjective(sp, 2 * ub + 3 * ua)
     end
 end
 
@@ -43,9 +43,9 @@ function test_expansion_sizes()
     node = model[1]
     @test SDDP.is_dhd(node)
     dhd = node.dhd
-    @test length(dhd.first_stage) == 2 # x.in and u_b
+    @test length(dhd.first_stage) == 2 # x.in and ub
     @test length(dhd.recourse_copies) == 3 # number of noises
-    @test num_variables(dhd.joint) == 2 + 3 * 3 # first stage + (x.out, u_a, noise) x #noise
+    @test num_variables(dhd.joint) == 2 + 4 * 3 # first stage + (x.out, ua, noise, θ) x #noise
     @test [c.noise.term for c in dhd.recourse_copies] == [1.0, 2.0, 3.0]
     @test all(c.noise.probability == 1/3 for c in dhd.recourse_copies)
     return
@@ -54,49 +54,49 @@ end
 function test_first_stage_constraints_added_once()
     node = _small_model()[1]
     joint = node.dhd.joint
-    u_b = node.dhd.first_stage[node.subproblem[:u_b]]
+    ub = node.dhd.first_stage[node.subproblem[:ub]]
     # `u <= x.in` once; `x.out == ...` once per copy.
     @test num_constraints(joint, AffExpr, MOI.LessThan{Float64}) == 1
     @test num_constraints(joint, AffExpr, MOI.EqualTo{Float64}) == 3
-    @test lower_bound(u_b) == 0.0
-    @test upper_bound(u_b) == 4.0
+    @test lower_bound(ub) == 0.0
+    @test upper_bound(ub) == 4.0
     return
 end
 
 function test_copies_use_shared_first_stage()
     node = _small_model()[1]
     x_in = node.dhd.first_stage[node.subproblem[:x].in]
-    u_b = node.dhd.first_stage[node.subproblem[:u_b]]
+    ub = node.dhd.first_stage[node.subproblem[:ub]]
     for c in node.dhd.recourse_copies
         @test c.variables[node.subproblem[:x].in] === x_in
-        @test c.variables[node.subproblem[:u_b]] === u_b
+        @test c.variables[node.subproblem[:ub]] === ub
         @test fix_value(c.variables[node.subproblem[:w]]) == c.noise.term
     end
-    u_a = [c.variables[node.subproblem[:u_a]] for c in node.dhd.recourse_copies]
-    @test length(unique(u_a)) == 3 # u_a is copied for each noise
+    ua = [c.variables[node.subproblem[:ua]] for c in node.dhd.recourse_copies]
+    @test length(unique(ua)) == 3 # ua is copied for each noise
     return
 end
 
 function test_stage_objective_per_copy()
     model = SDDP.LinearPolicyGraph(; stages = 1, lower_bound = 0.0) do sp, t
         @variable(sp, x >= 0, SDDP.State, initial_value = 0.0)
-        @variable(sp, u_b >= 0, SDDP.HereAndNow)
-        @variable(sp, u_a >= 0)
+        @variable(sp, ub >= 0, SDDP.HereAndNow)
+        @variable(sp, ua >= 0)
         SDDP.parameterize(sp, [10.0, 20.0]) do ω
-            @stageobjective(sp, u_b + ω * u_a)
+            @stageobjective(sp, ub + ω * ua)
             return
         end
     end
     node = model[1]
-    u_b = node.dhd.first_stage[node.subproblem[:u_b]]
-    # Expectation: 0.5 * (u_b + 10 u_a1) + 0.5 * (u_b + 20 u_a2).
+    ub = node.dhd.first_stage[node.subproblem[:ub]]
+    # Expectation: 0.5 * (ub + 10 ua1) + 0.5 * (ub + 20 ua2).
     obj = objective_function(node.dhd.joint)
-    @test coefficient(obj, u_b) ≈ 1.0
+    @test coefficient(obj, ub) ≈ 1.0
     for c in node.dhd.recourse_copies
-        u_a = c.variables[node.subproblem[:u_a]]
-        @test coefficient(c.stage_objective, u_b) == 1.0
-        @test coefficient(c.stage_objective, u_a) == c.noise.term
-        @test coefficient(obj, u_a) ≈ c.noise.probability * c.noise.term
+        ua = c.variables[node.subproblem[:ua]]
+        @test coefficient(c.stage_objective, ub) == 1.0
+        @test coefficient(c.stage_objective, ua) == c.noise.term
+        @test coefficient(obj, ua) ≈ c.noise.probability * c.noise.term
     end
     return
 end
@@ -104,8 +104,8 @@ end
 function test_single_noise()
     model = SDDP.LinearPolicyGraph(; stages = 1, lower_bound = 0.0) do sp, t
         @variable(sp, x >= 0, SDDP.State, initial_value = 0.0)
-        @variable(sp, u_b >= 0, SDDP.HereAndNow)
-        @stageobjective(sp, u_b)
+        @variable(sp, ub >= 0, SDDP.HereAndNow)
+        @stageobjective(sp, ub)
     end
     copies = model[1].dhd.recourse_copies
     @test length(copies) == 1
@@ -127,7 +127,7 @@ end
 function test_objective_state_error()
     builder = function (sp, t)
         SDDP.add_objective_state(
-            (u_a, ω) -> u_a + ω,
+            (ua, ω) -> ua + ω,
             sp;
             initial_value = 0.0,
             lower_bound = 0.0,
