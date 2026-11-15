@@ -11,6 +11,7 @@ struct DHDData
     joint::JuMP.Model
     first_stage::Dict{JuMP.VariableRef,JuMP.VariableRef}
     recourse_copies::Vector{RecourseCopy}
+    cut_constraints::Dict{Cut,Vector{JuMP.ConstraintRef}}
 end
 
 "Return true if `node` has here-and-now variables."
@@ -113,6 +114,11 @@ function _expand_to_dhd!(node::Node, optimizer, direct_mode::Bool)
         push!(recourse_copies, RecourseCopy(noise, variables, C, nothing))
     end
 
-    node.dhd = DHDData(joint, first_stage, recourse_copies)
+    node.dhd = DHDData(
+        joint,
+        first_stage,
+        recourse_copies,
+        Dict{Cut,Vector{JuMP.ConstraintRef}}(),
+    )
     return
 end

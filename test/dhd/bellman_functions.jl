@@ -93,6 +93,64 @@ function test_joint_objective()
     return
 end
 
+"Add the cut θ ≥ 10 - 2 (x' - 3) to `node` and return it."
+function _add_test_cut(node)
+    V = node.bellman_function.global_theta
+    SDDP._add_cut(V, 10.0, Dict(:x => -2.0), Dict(:x => 3.0), nothing, nothing)
+    return only(V.cuts)
+end
+
+function test_cut_added_to_template_and_copies()
+    node = _two_stage_model()[1]
+    F, S = AffExpr, MOI.GreaterThan{Float64}
+    @test num_constraints(node.subproblem, F, S) == 0
+    @test num_constraints(node.dhd.joint, F, S) == 0
+    cut = _add_test_cut(node)
+    @test num_constraints(node.subproblem, F, S) == 1 # one cut for template
+    @test num_constraints(node.dhd.joint, F, S) == 2  # one cut for each recourse copy
+    @test length(node.dhd.cut_constraints[cut]) == 2  # one row per recourse copy
+    return
+end
+
+function test_cut_rows_use_copy_variables()
+    node = _two_stage_model()[1]
+    cut = _add_test_cut(node)
+    x_out = node.subproblem[:x].out
+    rows = node.dhd.cut_constraints[cut]
+    for (c, row) in zip(node.dhd.recourse_copies, rows)
+        f = constraint_object(row).func # θ + 2x′ ≥ 16.
+        @test length(f.terms) == 2
+        @test coefficient(f, c.theta) == 1.0
+        @test coefficient(f, c.variables[x_out]) == 2.0
+        @test normalized_rhs(row) == 16.0
+    end
+    return
+end
+
+function test_cut_sense_max()
+    node = _two_stage_model(;
+        sense = :Max,
+        lower_bound = -Inf,
+        upper_bound = 10.0
+    )[1]
+    _add_test_cut(node)
+    joint = node.dhd.joint
+    @test num_constraints(joint, AffExpr, MOI.LessThan{Float64}) == 2
+    @test num_constraints(joint, AffExpr, MOI.GreaterThan{Float64}) == 0
+    return
+end
+
+function test_multi_cut_error()
+    node = _two_stage_model()[1]
+    SDDP._add_locals_if_necessary(node, node.bellman_function, 2)
+    V = node.bellman_function.local_thetas[1]
+    @test_throws(
+        ErrorException("Multi-cut is not supported for DHD nodes."),
+        SDDP._add_cut(V, 10.0, Dict(:x => -2.0), Dict(:x => 3.0), nothing, nothing)
+    )
+    return
+end
+
 end # module
 
 TestDHDBellmanFunctions.runtests()

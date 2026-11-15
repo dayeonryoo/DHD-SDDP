@@ -96,6 +96,7 @@ function _add_cut_constraint_to_model(V::ConvexApproximation, cut::Cut)
     else
         @constraint(model, expr <= cut.intercept)
     end
+    _add_cut_to_recourse_copies!(V, cut)
     return
 end
 
