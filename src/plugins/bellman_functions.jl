@@ -179,6 +179,7 @@ function _cut_selection_update(
     if length(V.cuts_to_be_deleted) >= V.deletion_minimum
         for cut in V.cuts_to_be_deleted
             JuMP.delete(model, cut.constraint_ref)
+            _delete_cut_from_recourse_copies!(V, cut)
             cut.constraint_ref = nothing
             cut.non_dominated_count = 0
         end

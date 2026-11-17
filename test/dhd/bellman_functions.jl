@@ -93,11 +93,11 @@ function test_joint_objective()
     return
 end
 
-"Add the cut θ ≥ 10 - 2 (x' - 3) to `node` and return it."
-function _add_test_cut(node)
+"Add the cut θ ≥ height - slope (x' - point) to `node` and return it."
+function _add_test_cut(node; height = 10.0, slope = -2.0, point = 3.0)
     V = node.bellman_function.global_theta
-    SDDP._add_cut(V, 10.0, Dict(:x => -2.0), Dict(:x => 3.0), nothing, nothing)
-    return only(V.cuts)
+    SDDP._add_cut(V, height, Dict(:x => slope), Dict(:x => point), nothing, nothing)
+    return last(V.cuts)
 end
 
 function test_cut_added_to_template_and_copies()
@@ -148,6 +148,61 @@ function test_multi_cut_error()
         ErrorException("Multi-cut is not supported for DHD nodes."),
         SDDP._add_cut(V, 10.0, Dict(:x => -2.0), Dict(:x => 3.0), nothing, nothing)
     )
+    return
+end
+
+function test_cut_deleted_from_copies()
+    node = _two_stage_model()[1]
+    joint = node.dhd.joint
+    F, S = AffExpr, MOI.GreaterThan{Float64}
+    A = _add_test_cut(node) # θ ≥ 16 − 2x'
+    rows_A = node.dhd.cut_constraints[A]
+    B = _add_test_cut(node; height = 20.0) # θ ≥ 26 − 2x'
+    # B is higher than A at x' = 3
+    @test A.constraint_ref === nothing
+    @test num_constraints(node.subproblem, F, S) == 1
+    @test num_constraints(joint, F, S) == 2
+    @test !any(is_valid(joint, row) for row in rows_A)
+    @test !haskey(node.dhd.cut_constraints, A)
+    @test haskey(node.dhd.cut_constraints, B)
+    return
+end
+
+function test_deletion_minimum()
+    node = _two_stage_model()[1]
+    joint = node.dhd.joint
+    F, S = AffExpr, MOI.GreaterThan{Float64}
+    node.bellman_function.global_theta.deletion_minimum = 2
+    A = _add_test_cut(node)
+    B = _add_test_cut(node; height = 20.0)
+    # Only A is dominated, so nothing is deleted yet.
+    @test num_constraints(node.subproblem, F, S) == 2
+    @test num_constraints(joint, F, S) == 4
+    C = _add_test_cut(node; height = 30.0)
+    # A and B are dominated, so both are deleted.
+    @test num_constraints(node.subproblem, F, S) == 1
+    @test num_constraints(joint, F, S) == 2
+    @test collect(keys(node.dhd.cut_constraints)) == [C]
+    return
+end
+
+function test_deleted_cut_readded()
+    node = _two_stage_model()[1]
+    joint = node.dhd.joint
+    F, S = AffExpr, MOI.GreaterThan{Float64}
+    A = _add_test_cut(node) # θ ≥ 16 − 2x'
+    B = _add_test_cut(node; height = 20.0) # θ ≥ 26 − 2x'
+    # A is deleted.
+    @test !haskey(node.dhd.cut_constraints, A)
+    C = _add_test_cut(node; height = 0.0, slope = 0.0, point = 0.0) # θ ≥ 0
+    # At x' = 0, A is higher than C so A is readded and C is deleted.
+    @test A.constraint_ref !== nothing
+    @test C.constraint_ref === nothing
+    @test num_constraints(node.subproblem, F, S) == 2 # A and B
+    @test num_constraints(joint, F, S) == 4
+    @test haskey(node.dhd.cut_constraints, A)
+    @test !haskey(node.dhd.cut_constraints, C)
+    @test all(is_valid(joint, row) for row in node.dhd.cut_constraints[A])
     return
 end
 

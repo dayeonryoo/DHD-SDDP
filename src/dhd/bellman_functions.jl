@@ -54,3 +54,16 @@ function _add_cut_to_recourse_copies!(V::ConvexApproximation, cut::Cut)
     node.dhd.cut_constraints[cut] = rows
     return
 end
+
+"Delete the rows of `cut`from each recourse copy of the joint subproblem."
+function _delete_cut_from_recourse_copies!(V::ConvexApproximation, cut::Cut)
+    node = get_node(JuMP.owner_model(V.theta))
+    if !is_dhd(node)
+        return
+    end
+    rows = pop!(node.dhd.cut_constraints, cut)
+    for row in rows
+        JuMP.delete(node.dhd.joint, row)
+    end
+    return
+end
