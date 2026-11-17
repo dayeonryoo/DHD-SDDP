@@ -2,6 +2,7 @@ module TestDHDBellmanFunctions
 
 using SDDP
 using Test
+import HiGHS
 
 function runtests()
     for name in names(@__MODULE__; all = true)
@@ -249,6 +250,74 @@ function test_add_all_cuts()
     @test num_constraints(node.subproblem, F, S) == 2
     @test num_constraints(joint, F, S) == 4
     @test all(is_valid(joint, row) for row in node.dhd.cut_constraints[A])
+    return
+end
+
+
+"Simple hydro with two DHD stages, or its three-stage DH-aug twin."
+function _two_stage_hydro(; dhd::Bool)
+    return SDDP.LinearPolicyGraph(;
+        stages = dhd ? 2 : 3,
+        lower_bound = 0.0
+    ) do sp, t
+        @variable(sp, 0 <= x_storage <= 8, SDDP.State, initial_value = 6)
+        if dhd
+            @variable(sp, 0 <= u_thermal <= 9, SDDP.HereAndNow)
+            thermal = u_thermal
+        else
+            @variable(sp, 0 <= u_thermal <= 9, SDDP.State, initial_value = 0)
+            thermal = u_thermal.in
+            if t == 1
+                @constraint(sp, x_storage.out == x_storage.in)
+                @stageobjective(sp, 0.0)
+                return
+            end
+        end
+        @variable(sp, u_hydro >= 0)
+        @variable(sp, u_spill >= 0)
+        @variable(sp, u_unmet_demand >= 0)
+        @variable(sp, w_inflow)
+        SDDP.parameterize(ω -> fix(w_inflow, ω), sp, [2.0, 3.0])
+        @constraint(sp, thermal + u_hydro == 9 - u_unmet_demand)
+        @constraint(sp, x_storage.out == x_storage.in - u_hydro - u_spill + w_inflow)
+        @stageobjective(sp, 500 * u_unmet_demand + 20 * thermal)
+    end
+end
+
+function test_two_stage_hydro_value()
+    model = _two_stage_hydro(; dhd = true)
+    set_optimizer(model, HiGHS.Optimizer)
+    node = model[1]
+    # Manually adding the stage 2 cost-to-go: V(x') = max(0, 140 - 20x').
+    SDDP._add_cut(
+        node.bellman_function.global_theta,
+        140.0,
+        Dict(:x_storage => -20.0),
+        Dict(:x_storage => 0.0),
+        nothing,
+        nothing,
+    )
+    joint = node.dhd.joint
+    # Manually setting initial incoming state value for the joint subproblem.
+    fix(node.dhd.first_stage[node.subproblem[:x_storage].in], 6.0)
+    optimize!(joint) # Optimal value = 150 with u ∈ [1, 7]
+    @test is_solved_and_feasible(joint)
+    # Compare the joint solve with hand calculation.
+    @test objective_value(joint) ≈ 150
+    u = value(node.dhd.first_stage[node.subproblem[:u_thermal]])
+    @test 1 - 1e-6 <= u <= 7 + 1e-6
+    for c in node.dhd.recourse_copies
+        x_out = value(c.variables[node.subproblem[:x_storage].out])
+        @test value(c.theta) ≈ max(0, 140 - 20 * x_out) atol = 1e-6
+    end
+    # Compare the joint solve with SDDP's deterministic equivalent.
+    det = SDDP.deterministic_equivalent(
+        _two_stage_hydro(; dhd = false),
+        HiGHS.Optimizer
+    )
+    set_silent(det)
+    optimize!(det)
+    @test objective_value(det) ≈ objective_value(joint)
     return
 end
 
