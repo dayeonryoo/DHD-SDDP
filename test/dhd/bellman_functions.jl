@@ -191,7 +191,7 @@ function test_deleted_cut_readded()
     joint = node.dhd.joint
     F, S = AffExpr, MOI.GreaterThan{Float64}
     A = _add_test_cut(node) # θ ≥ 16 − 2x'
-    B = _add_test_cut(node; height = 20.0) # θ ≥ 26 − 2x'
+    _add_test_cut(node; height = 20.0) # θ ≥ 26 − 2x'
     # A is deleted.
     @test !haskey(node.dhd.cut_constraints, A)
     C = _add_test_cut(node; height = 0.0, slope = 0.0, point = 0.0) # θ ≥ 0
@@ -202,6 +202,52 @@ function test_deleted_cut_readded()
     @test num_constraints(joint, F, S) == 4
     @test haskey(node.dhd.cut_constraints, A)
     @test !haskey(node.dhd.cut_constraints, C)
+    @test all(is_valid(joint, row) for row in node.dhd.cut_constraints[A])
+    return
+end
+
+function test_cut_file_round_trip()
+    model = _two_stage_model()
+    node = model[1]
+    # Cut 1: θ ≥ 16 - 2x' with point = 3
+    # Cut 2: θ ≥ -4 + 2x' with point = 8
+    # Cut 1 is 10 at x' = 3 and 0 at x' = 8.
+    # Cut 2 is 2 at x' = 3 and 12 at x' = 8.
+    # So they are both kept.
+    _add_test_cut(node)
+    _add_test_cut(node; height = 12.0, slope = 2.0, point = 8.0)
+    filename = tempname()
+    SDDP.write_cuts_to_file(model, filename)
+    new_model = _two_stage_model()
+    SDDP.read_cuts_from_file(new_model, filename)
+    rm(filename)
+    new_node = new_model[1]
+    F, S = AffExpr, MOI.GreaterThan{Float64}
+    @test num_constraints(new_node.subproblem, F, S) == 2
+    @test num_constraints(new_node.dhd.joint, F, S) == 4
+    V = node.bellman_function.global_theta
+    new_V = new_node.bellman_function.global_theta
+    for (cut, new_cut) in zip(V.cuts, new_V.cuts)
+        @test new_cut.intercept ≈ cut.intercept
+        @test new_cut.coefficients[:x] ≈ cut.coefficients[:x]
+        rows = new_node.dhd.cut_constraints[new_cut]
+        @test all(normalized_rhs(row) ≈ cut.intercept for row in rows)
+    end
+    return
+end
+
+function test_add_all_cuts()
+    model = _two_stage_model()
+    node = model[1]
+    joint = node.dhd.joint
+    F, S = AffExpr, MOI.GreaterThan{Float64}
+    A = _add_test_cut(node)
+    _add_test_cut(node; height = 20.0)
+    @test num_constraints(joint, F, S) == 2 # A is deleted.
+    SDDP.add_all_cuts(model) # Restores the deleted A.
+    @test A.constraint_ref !== nothing
+    @test num_constraints(node.subproblem, F, S) == 2
+    @test num_constraints(joint, F, S) == 4
     @test all(is_valid(joint, row) for row in node.dhd.cut_constraints[A])
     return
 end
