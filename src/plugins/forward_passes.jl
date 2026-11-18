@@ -98,14 +98,25 @@ function forward_pass(
             # ===== End: starting state for infinite horizon =====
             # Solve the subproblem, note that `duality_handler = nothing`.
             @_timeit_threadsafe model.timer_output "solve_subproblem" begin
-                subproblem_results = solve_subproblem(
-                    model,
-                    node,
-                    incoming_state_value,
-                    noise,
-                    scenario_path[1:depth];
-                    duality_handler = nothing,
-                )
+                if is_dhd(node)
+                    # Joint solve, fix the here-and-now-values, then recourse solve.
+                    subproblem_results = solve_dhd_node(
+                        model,
+                        node,
+                        incoming_state_value,
+                        noise,
+                        scenario_path[1:depth],
+                    )
+                else
+                    subproblem_results = solve_subproblem(
+                        model,
+                        node,
+                        incoming_state_value,
+                        noise,
+                        scenario_path[1:depth];
+                        duality_handler = nothing,
+                    )
+                end
             end
             # Cumulate the stage_objective.
             cumulative_value += subproblem_results.stage_objective

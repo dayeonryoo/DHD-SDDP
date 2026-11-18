@@ -317,6 +317,67 @@ function test_calculate_bound_weights_root_children()
     return
 end
 
+function test_forward_pass_path_cost()
+    model = _two_stage_hydro()
+    _add_exact_cut(model)
+    options = SDDP.Options(model, model.initial_root_state)
+    for _ in 1:10
+        result = SDDP.forward_pass(model, options, SDDP.DefaultForwardPass())
+        @test length(result.sampled_states) == 2
+        w = result.scenario_path[1][2]
+        u = value(model[1].subproblem[:u_thermal])
+        @test 1 - 1e-6 <= u <= 7 + 1e-6
+        @test result.sampled_states[1][:x_storage] ≈ u + w - 3
+        # Thermal covers 18 - (6 + w + 2) over both stages at 20 per unit.
+        @test result.cumulative_value ≈ 20 * (10 - w)
+    end
+    return
+end
+
+"Run one forward pass in which both stages see the inflow `w`."
+function _forward_pass(model, w)
+    options = SDDP.Options(
+        model,
+        model.initial_root_state;
+        sampling_scheme = SDDP.Historical([(1, w), (2, w)]),
+    )
+    return SDDP.forward_pass(model, options, SDDP.DefaultForwardPass())
+end
+
+function test_forward_pass_commits_before_noise()
+    model = _two_stage_hydro()
+    _add_exact_cut(model)
+    _forward_pass(model, 2.0)
+    u_dry = value(model[1].subproblem[:u_thermal])
+    _forward_pass(model, 3.0)
+    u_wet = value(model[1].subproblem[:u_thermal])
+    # The commitment is made before the inflow is known.
+    @test u_dry ≈ u_wet
+    return
+end
+
+function test_forward_pass_without_cuts()
+    model = _two_stage_hydro()
+    result = _forward_pass(model, 2.0)
+    # With only θ ≥ 0, stage 1 commits u1 = 1 and uses all 8 units of water.
+    @test value(model[1].subproblem[:u_thermal]) ≈ 1
+    @test result.sampled_states[1][:x_storage] ≈ 0 atol = 1e-6
+    # Stage 2 then commits u2 = 7 at 20 per unit.
+    @test value(model[2].subproblem[:u_thermal]) ≈ 7
+    @test result.cumulative_value ≈ 160 # = 20u1 + 20u2 = path cost.
+    return
+end
+
+function test_forward_pass_counts_solve()
+    model = _two_stage_hydro()
+    options = SDDP.Options(model, model.initial_root_state)
+    before = get(model.ext, :total_solves, 0)
+    SDDP.forward_pass(model, options, SDDP.DefaultForwardPass())
+    # Two nodes, each with a joint solve and a recourse solve.
+    @test model.ext[:total_solves] == before + 4
+    return
+end
+
 end # module
 
 TestDHDAlgorithm.runtests()
