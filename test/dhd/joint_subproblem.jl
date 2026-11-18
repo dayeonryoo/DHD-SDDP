@@ -222,10 +222,6 @@ function test_unsupported_functions_error()
         SDDP.simulate(model, 1)
     )
     @test_throws(
-        ErrorException("`SDDP.calculate_bound` does not support DHD nodes yet."),
-        SDDP.calculate_bound(model)
-    )
-    @test_throws(
         ErrorException("`SDDP.deterministic_equivalent` does not support DHD nodes yet."),
         SDDP.deterministic_equivalent(model, HiGHS.Optimizer)
     )

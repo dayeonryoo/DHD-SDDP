@@ -892,9 +892,6 @@ function calculate_bound(
     root_state::Dict{Symbol,Float64} = model.initial_root_state;
     risk_measure::AbstractRiskMeasure = Expectation(),
 ) where {T}
-
-    _throw_if_dhd(model, "calculate_bound")
-
     # Initialization.
     noise_supports = Any[]
     probabilities = Float64[]
@@ -911,6 +908,19 @@ function calculate_bound(
         node = model[child.term]
         lock(node.lock)
         try
+            if is_dhd(node)
+                # One joint solve, since the noise is inside the joint model.
+                joint_result = solve_joint_subproblem(
+                    model,
+                    node,
+                    root_state;
+                    duality_handler = nothing,
+                )
+                push!(objectives, joint_result.objective)
+                push!(probabilities, child.probability)
+                push!(noise_supports, nothing)
+                continue
+            end
             for noise in node.noise_terms
                 if node.objective_state !== nothing
                     update_objective_state(

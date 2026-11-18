@@ -258,6 +258,65 @@ function test_solve_dhd_node_counts_solves()
     return
 end
 
+function test_calculate_bound_without_cuts()
+    model = _two_stage_hydro()
+    # With only θ ≥ 0, node 1 commits u = 1 to cover the dry case.
+    @test SDDP.calculate_bound(model) ≈ 20
+    return
+end
+
+function test_calculate_bound_with_exact_cuts()
+    model = _two_stage_hydro()
+    _add_exact_cut(model)
+    @test SDDP.calculate_bound(model) ≈ 150
+    # V_1(x) = 270 - 20x near x = 6 (initial storage)
+    @test SDDP.calculate_bound(model, Dict(:x_storage => 4.0)) ≈ 190
+    return
+end
+
+function test_calculate_bound_max()
+    model = _two_stage_hydro(; sense = :Max)
+    _add_exact_cut(model; sense = :Max)
+    @test SDDP.calculate_bound(model) ≈ -150
+    return
+end
+
+function test_calculate_bound_one_solve_per_root_child()
+    model = _two_stage_hydro()
+    before = get(model.ext, :total_solves, 0)
+    SDDP.calculate_bound(model)
+    # One joint solve; an HD node would be solved once per noise.
+    @test model.ext[:total_solves] == before + 1
+    return
+end
+
+function test_calculate_bound_weights_root_children()
+    graph = SDDP.Graph(0, [1, 2], [(0 => 1, 0.3), (0 => 2, 0.7)])
+    model = SDDP.PolicyGraph(
+        graph;
+        lower_bound = 0.0,
+        optimizer = HiGHS.Optimizer,
+    ) do sp, node
+        @variable(sp, 0 <= x_storage <= 8, SDDP.State, initial_value = 6.0)
+        @variable(sp, 0 <= u_thermal <= 9, SDDP.HereAndNow)
+        @variable(sp, u_hydro >= 0)
+        @variable(sp, u_spill >= 0)
+        @variable(sp, u_unmet_demand >= 0)
+        @variable(sp, w_inflow)
+        SDDP.parameterize(ω -> fix(w_inflow, ω), sp, [2.0, 3.0])
+        @constraint(sp, u_thermal + u_hydro == 9 - u_unmet_demand)
+        @constraint(
+            sp,
+            x_storage.out == x_storage.in - u_hydro - u_spill + w_inflow
+        )
+        # Thermal costs 20 at node 1 and 40 at node 2.
+        @stageobjective(sp, 500 * u_unmet_demand + 20 * node * u_thermal)
+    end
+    # Both nodes are leaved (θ = 0) and commit u = 1 at x = 6.
+    @test SDDP.calculate_bound(model) ≈ 34 # = 0.3 * 20 + 0.7 * 40.
+    return
+end
+
 end # module
 
 TestDHDAlgorithm.runtests()
