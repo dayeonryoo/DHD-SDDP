@@ -84,6 +84,59 @@ function test_solve_joint_with_exact_cut()
     return
 end
 
+function test_solve_joint_leaf()
+    model = _two_stage_hydro()
+    node = model[2]
+    handler = SDDP.ContinuousConicDuality()
+    # Below 7, one more unit of storage saves 20 of thermal.
+    result = SDDP.solve_joint_subproblem(
+        model,
+        node,
+        Dict(:x_storage => 6.0);
+        duality_handler = handler,
+    )
+    @test result.objective ≈ 20
+    @test result.duals[:x_storage] ≈ -20
+    # Above 7, no thermal is needed.
+    result = SDDP.solve_joint_subproblem(
+        model,
+        node,
+        Dict(:x_storage => 8.0);
+        duality_handler = handler,
+    )
+    @test result.objective ≈ 0 atol = 1e-6
+    @test result.duals[:x_storage] ≈ 0 atol = 1e-6
+    return
+end
+
+function test_solve_joint_without_duals()
+    model = _two_stage_hydro()
+    _add_exact_cut(model)
+    result = SDDP.solve_joint_subproblem(
+        model,
+        model[1],
+        Dict(:x_storage => 6.0);
+        duality_handler = nothing,
+    )
+    @test result.objective ≈ 150
+    @test isempty(result.duals)
+    return
+end
+
+function test_solve_joint_max_dual_sign()
+    model = _two_stage_hydro(; sense = :Max)
+    _add_exact_cut(model; sense = :Max)
+    result = SDDP.solve_joint_subproblem(
+        model,
+        model[1],
+        Dict(:x_storage => 6.0);
+        duality_handler = SDDP.ContinuousConicDuality(),
+    )
+    @test result.objective ≈ -150
+    @test result.duals[:x_storage] ≈ 20
+    return
+end
+
 function test_solve_joint_counts_solves()
     model = _two_stage_hydro()
     before = get(model.ext, :total_solves, 0)
