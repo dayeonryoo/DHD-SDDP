@@ -794,6 +794,25 @@ function solve_all_children(
         child_node = model[child.term]
         lock(child_node.lock)
         try
+            if is_dhd(child_node)
+                # One joint solve, since the child's noise is inside its model.
+                _check_backward_sampling_scheme(backward_sampling_scheme)
+                @_timeit_threadsafe model.timer_output "solve_subproblem" begin
+                    subproblem_results = solve_joint_subproblem(
+                        model,
+                        child_node,
+                        outgoing_state;
+                        duality_handler = duality_handler,
+                    )
+                end
+                push!(items.duals, subproblem_results.duals)
+                push!(items.supports, Noise(nothing, 1.0))
+                push!(items.nodes, child_node.index)
+                push!(items.probability, child.probability)
+                push!(items.objectives, subproblem_results.objective)
+                push!(items.belief, belief)
+                continue
+            end
             @_timeit_threadsafe model.timer_output "prepare_backward_pass" begin
                 restore_duality = prepare_backward_pass(
                     child_node,

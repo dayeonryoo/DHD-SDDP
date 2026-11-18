@@ -159,3 +159,14 @@ function solve_dhd_node(
         scenario_path,
     )
 end
+
+"Error unless every noise of a DHD child is used in the backward pass."
+function _check_backward_sampling_scheme(scheme::AbstractBackwardSamplingScheme)
+    if !(scheme isa CompleteSampler)
+        error(
+            "`$(typeof(scheme))` is not supported for DHD nodes. Use " *
+            "`SDDP.CompleteSampler().",
+        )
+    end
+    return
+end

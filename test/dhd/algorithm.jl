@@ -378,6 +378,116 @@ function test_forward_pass_counts_solve()
     return
 end
 
+"Run the backward pass at node 1 with the trial point `x`."
+function _backward_pass(model, x; kwargs...)
+    # `train` sets single cuts; the default of a BellmanFunction is multi-cut.
+    for node in values(model.nodes)
+        node.bellman_function.cut_type = SDDP.SINGLE_CUT
+    end
+    options = SDDP.Options(model, model.initial_root_state; kwargs...)
+    return SDDP.backward_pass(
+        model,
+        options,
+        Tuple{Int,Float64}[(1, 2.0)],
+        [Dict(:x_storage => x)],
+        NTuple{0,Float64}[],
+        Tuple{Int,Dict{Int,Float64}}[]
+    )
+end
+
+function test_backward_pass_builds_exact_cut()
+    model = _two_stage_hydro()
+    _backward_pass(model, 6.0)
+    # θ ≥ 140 - 20x'.
+    cut = only(model[1].bellman_function.global_theta.cuts)
+    @test cut.intercept ≈ 140
+    @test cut.coefficients[:x_storage] ≈ -20
+    @test length(model[1].dhd.cut_constraints[cut]) == 2
+    @test SDDP.calculate_bound(model) ≈ 150
+    return
+end
+
+function test_backward_pass_flat_cut()
+    model = _two_stage_hydro()
+    _backward_pass(model, 8.0)
+    # With storage > 7, V is flat at 0, so the cut is θ ≥ 0.
+    cut = only(model[1].bellman_function.global_theta.cuts)
+    @test cut.intercept ≈ 0 atol = 1e-6
+    @test cut.coefficients[:x_storage] ≈ 0 atol = 1e-6
+    @test SDDP.calculate_bound(model) ≈ 20
+    return
+end
+
+function test_backward_pass_max()
+    model = _two_stage_hydro(; sense = :Max)
+    _backward_pass(model, 6.0)
+    # θ ≤ -140 + 20x'.
+    cut = only(model[1].bellman_function.global_theta.cuts)
+    @test cut.intercept ≈ -140
+    @test cut.coefficients[:x_storage] ≈ 20
+    @test length(model[1].dhd.cut_constraints[cut]) == 2
+    @test SDDP.calculate_bound(model) ≈ -150
+    return
+end
+
+function test_backward_pass_one_solve_per_child()
+    model = _two_stage_hydro()
+    before = get(model.ext, :total_solves, 0)
+    _backward_pass(model, 6.0)
+    # One joint solve; an HD child would be solved once per noise.
+    @test model.ext[:total_solves] == before + 1
+    return
+end
+
+function test_backward_pass_weights_children()
+    graph = SDDP.Graph(
+        0,
+        [1, 2, 3],
+        [(0 => 1, 1.0), (1 => 2, 0.3), (1 => 3, 0.7)],
+    )
+    model = SDDP.PolicyGraph(
+        graph;
+        lower_bound = 0.0,
+        optimizer = HiGHS.Optimizer,
+    ) do sp, node
+        @variable(sp, 0 <= x_storage <= 8, SDDP.State, initial_value = 6)
+        @variable(sp, 0 <= u_thermal <= 9, SDDP.HereAndNow)
+        @variable(sp, u_hydro >= 0)
+        @variable(sp, u_spill >= 0)
+        @variable(sp, u_unmet_demand >= 0)
+        @variable(sp, w_inflow)
+        SDDP.parameterize(ω -> fix(w_inflow, ω), sp, [2.0, 3.0])
+        @constraint(sp, u_thermal + u_hydro == 9 - u_unmet_demand)
+        @constraint(
+            sp,
+            x_storage.out == x_storage.in - u_hydro - u_spill + w_inflow
+        )
+        # Thermal costs 40 at node 3 and 20 elsewhere.
+        cost = node === 3 ? 40 : 20
+        @stageobjective(sp, 500 * u_unmet_demand + cost * u_thermal)
+    end
+    _backward_pass(model, 6.0)
+    # Children: V = 20, λ = -20 (p = 0.3) and V = 40, λ = -40 (p = 0.7).
+    # Expectation: θ = 34 and β = -34 at x = 6, so α = 34 + 34 * 6 = 238.
+    cut = only(model[1].bellman_function.global_theta.cuts)
+    @test cut.intercept ≈ 238
+    @test cut.coefficients[:x_storage] ≈ -34
+    return
+end
+
+function test_backward_pass_monte_carlo_error()
+    model = _two_stage_hydro()
+    @test_throws(
+        ErrorException,
+        _backward_pass(
+            model,
+            6.0;
+            backward_sampling_scheme = SDDP.MonteCarloSampler(1),
+        ),
+    )
+    return
+end
+
 end # module
 
 TestDHDAlgorithm.runtests()
