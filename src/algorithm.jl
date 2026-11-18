@@ -447,6 +447,7 @@ function _initialize_solver(node::Node; throw_error::Bool)
         set_optimizer(node.subproblem, node.optimizer)
         set_silent(node.subproblem)
     end
+    _initialize_joint_solver(node)
     return
 end
 
@@ -489,6 +490,7 @@ function _uninitialize_solver(model::PolicyGraph; throw_error::Bool)
                MOIU.NO_OPTIMIZER
             MOI.Utilities.drop_optimizer(node.subproblem)
         end
+        _uninitialize_joint_solver(node)
     end
     return
 end

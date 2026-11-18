@@ -58,6 +58,7 @@ include("plugins/forward_passes.jl")
 include("dhd/here_and_now.jl")
 include("dhd/joint_subproblem.jl")
 include("dhd/bellman_functions.jl")
+include("dhd/algorithm.jl")
 
 # Visualization related code.
 include("visualization/publication_plot.jl")
