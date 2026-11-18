@@ -180,6 +180,84 @@ function test_solve_joint_unsupported_duality_handler()
     return
 end
 
+function test_recourse_fixes_here_and_now()
+    model = _two_stage_hydro()
+    _add_exact_cut(model)
+    node = model[1]
+    # x = 6, h = 9 - u, x' = x - h + w, θ = 140 - 20x'
+    u = node.subproblem[:u_thermal]
+    path = Tuple{Int,Any}[(1, 2.0)]
+    # Dry (w = 2):
+    #   1 ≤ u ≤ 8, x' = u - 1, stage cost = 20u, θ = 160 - 20u, objective = 160
+    result = SDDP.solve_recourse_subproblem(
+        model,
+        node,
+        Dict(:x_storage => 6.0),
+        Dict(u => 4.0),
+        2.0,
+        path,
+    )
+    @test is_fixed(u)
+    @test !has_lower_bound(u) && !has_upper_bound(u)
+    @test value(u) ≈ 4
+    @test result.state[:x_storage] ≈ 3
+    @test result.stage_objective ≈ 80
+    @test result.objective ≈ 160
+    # Wet (w = 3):
+    #   0 ≤ u ≤ 7, x' = u, stage cost = 20u, θ = 140 - 20u, objective = 140
+    result = SDDP.solve_recourse_subproblem(
+        model,
+        node,
+        Dict(:x_storage => 6.0),
+        Dict(u => 6.0),
+        3.0,
+        path,
+    )
+    @test value(u) ≈ 6
+    @test result.state[:x_storage] ≈ 6
+    @test result.stage_objective ≈ 120
+    @test result.objective ≈ 140
+    return
+end
+
+function test_solve_dhd_node()
+    model = _two_stage_hydro()
+    _add_exact_cut(model)
+    node = model[1]
+    for (w, objective) in [(2.0, 160.0), (3.0, 140.0)]
+        result = SDDP.solve_dhd_node(
+            model,
+            node,
+            Dict(:x_storage => 6.0),
+            w,
+            Tuple{Int,Any}[(1, w)],
+        )
+        # The recourse uses the commitment from the joint solve.
+        u = value(node.subproblem[:u_thermal])
+        @test u ≈ value(node.dhd.first_stage[node.subproblem[:u_thermal]])
+        @test 1 - 1e-6 <= u <= 7 + 1e-6
+        @test result.state[:x_storage] ≈ u + w - 3
+        @test result.stage_objective ≈ 20 * u
+        @test result.objective ≈ objective
+    end
+    return
+end
+
+function test_solve_dhd_node_counts_solves()
+    model = _two_stage_hydro()
+    before = get(model.ext, :total_solves, 0)
+    SDDP.solve_dhd_node(
+        model,
+        model[2],
+        Dict(:x_storage => 6.0),
+        2.0,
+        Tuple{Int,Any}[(2, 2.0)],
+    )
+    # One joint solve and one recourse solve.
+    @test model.ext[:total_solves] == before + 2
+    return
+end
+
 end # module
 
 TestDHDAlgorithm.runtests()

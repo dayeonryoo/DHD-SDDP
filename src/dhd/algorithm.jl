@@ -109,3 +109,53 @@ function solve_joint_subproblem(
         duals = _joint_duals(node, duality_handler),
     )
 end
+
+"Fix the here-and-now variables of the template at the given values."
+function _fix_here_and_now!(
+    node::Node,
+    here_and_now::Dict{JuMP.VariableRef,Float64},
+)
+    for (u, value) in here_and_now
+        JuMP.fix(u, value; force = true)
+    end
+    return
+end
+
+"Solve the recourse subproblem of `node` with the here-and-now values fixed."
+function solve_recourse_subproblem(
+    model::PolicyGraph,
+    node::Node,
+    state::Dict{Symbol,Float64},
+    here_and_now::Dict{JuMP.VariableRef,Float64},
+    noise,
+    scenario_path,
+)
+    _fix_here_and_now!(node, here_and_now)
+    return solve_subproblem(
+        model,
+        node,
+        state,
+        noise,
+        scenario_path;
+        duality_handler = nothing,
+    )
+end
+
+"Solve the joint subproblem, then the recourse subproblem for `noise`."
+function solve_dhd_node(
+    model::PolicyGraph,
+    node::Node,
+    state::Dict{Symbol,Float64},
+    noise,
+    scenario_path,
+)
+    joint = solve_joint_subproblem(model, node, state; duality_handler = nothing)
+    return solve_recourse_subproblem(
+        model,
+        node,
+        state,
+        joint.here_and_now,
+        noise,
+        scenario_path,
+    )
+end
