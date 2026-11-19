@@ -144,6 +144,46 @@ function simple_hydro_dh_aug(; T::Int = 4, Ω::Vector{Float64} = SIMPLE_INFLOW)
     end
 end
 
+"""
+    simple_hydro_dhd(; T = 4, Ω = SIMPLE_INFLOW)
+
+Decision-hazard-decision model: u_thermal is committed before the inflow is
+seen, and the other controls are chosen after it. Node `t` is stage `t`, and
+storage is the only state. The only change from `simple_hydro_hd` is the
+`SDDP.HereAndNow` tag.
+"""
+function simple_hydro_dhd(; T::Int = 4, Ω::Vector{Float64} = SIMPLE_INFLOW)
+    return SDDP.LinearPolicyGraph(;
+        stages = T,
+        sense = :Min,
+        lower_bound = 0.0,
+        optimizer = HiGHS.Optimizer,
+    ) do sp, t
+        @variable(
+            sp,
+            0 <= x_storage <= SIMPLE_STORAGE_MAX,
+            SDDP.State,
+            initial_value = SIMPLE_STORAGE_0,
+        )
+        @variable(sp, 0 <= u_thermal <= SIMPLE_DEMAND, SDDP.HereAndNow)
+        @variable(sp, u_hydro >= 0)
+        @variable(sp, u_spill >= 0)
+        @variable(sp, u_unmet_demand >= 0)
+        @variable(sp, w_inflow)
+        SDDP.parameterize(ω -> fix(w_inflow, ω), sp, Ω)
+        @constraint(sp, u_thermal + u_hydro == SIMPLE_DEMAND - u_unmet_demand)
+        @constraint(
+            sp,
+            x_storage.out == x_storage.in - u_hydro - u_spill + w_inflow,
+        )
+        @stageobjective(
+            sp,
+            SIMPLE_VOLL * u_unmet_demand + SIMPLE_THERMAL_COST * u_thermal,
+        )
+        return
+    end
+end
+
 # ===========================================================================
 # 2. Seasonal hydro (example "Hydro-thermal scheduling"), finite horizon
 # ===========================================================================
@@ -292,6 +332,63 @@ function seasonal_hydro_dh_aug(;
                 ),
             )
         end
+        return
+    end
+end
+
+"""
+    seasonal_hydro_dhd(; years = SEASONAL_YEARS, Ω = SEASONAL_NOISE)
+
+Decision-hazard-decision seasonal model with `3 * years` stages: u_thermal is
+committed before the season's inflow and demand are seen. Storage is the only
+state. The only change from `seasonal_hydro_hd` is the `SDDP.HereAndNow` tag.
+"""
+function seasonal_hydro_dhd(;
+    years::Int = SEASONAL_YEARS,
+    Ω::Vector{Tuple{Float64,Float64}} = SEASONAL_NOISE,
+)
+    return SDDP.LinearPolicyGraph(;
+        stages = N_SEASONS * years,
+        sense = :Min,
+        lower_bound = 0.0,
+        optimizer = HiGHS.Optimizer,
+    ) do sp, t
+        season, year = season_and_year(t)
+        @variable(
+            sp,
+            STORAGE_MIN <= x_storage <= STORAGE_MAX,
+            SDDP.State,
+            initial_value = STORAGE_0,
+        )
+        @variable(sp, 0 <= u_thermal <= THERMAL_MAX, SDDP.HereAndNow)
+        @variable(sp, u_hydro >= 0)
+        @variable(sp, u_spill >= 0)
+        @variable(sp, u_unmet_demand >= 0)
+        @variable(sp, u_surplus >= 0)
+        @variable(sp, w_inflow)
+        @variable(sp, w_demand)
+        SDDP.parameterize(sp, Ω) do ω
+            fix(w_inflow, ω[1])
+            fix(w_demand, ω[2])
+            return
+        end
+        @constraint(
+            sp,
+            x_storage.out == x_storage.in - u_hydro - u_spill + w_inflow,
+        )
+        @constraint(
+            sp,
+            u_hydro + u_thermal + u_unmet_demand == w_demand + u_surplus,
+        )
+        @stageobjective(
+            sp,
+            discount_factor(year) * (
+                SPILL_COST * u_spill +
+                thermal_cost(season) * u_thermal +
+                VOLL * u_unmet_demand +
+                SURPLUS_COST * u_surplus
+            ),
+        )
         return
     end
 end

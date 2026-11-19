@@ -10,7 +10,7 @@
 #
 # Every formulation of the problem is built from the constants below, so the
 # hazard-decision (HD) model, the augmented-state decision-hazard (DH) model
-# and, later, the DHD-SDDP model are guaranteed to describe the same problem.
+# and the DHD-SDDP model are guaranteed to describe the same problem.
 
 using SDDP
 import HiGHS
@@ -166,6 +166,64 @@ function batteries_dh_aug(; T::Int = 24, Ω::Vector{Float64} = LOAD_NOISE)
                 w_load + u_surplus,
             )
         end
+        return
+    end
+end
+
+# ---------------------------------------------------------------------------
+# Decision-hazard-decision (DHD): thermal output for hour t is committed
+# before the load in hour t is seen, inside the hour-t node.
+#
+# x_thermal stays a state because the ramp limit links consecutive hours, so
+# unlike the hydro models the state is not smaller than in the DH-aug model.
+# What DHD removes is the extra "hour 0" node.
+# ---------------------------------------------------------------------------
+
+"""
+    batteries_dhd(; T = 24, Ω = LOAD_NOISE)
+
+Battery model in which thermal output is a here-and-now decision of the
+hour-`t` node. Node `t` is hour `t`.
+"""
+function batteries_dhd(; T::Int = 24, Ω::Vector{Float64} = LOAD_NOISE)
+    _check_inputs(T, Ω)
+    return SDDP.LinearPolicyGraph(;
+        stages = T,
+        sense = :Min,
+        lower_bound = 0.0,
+        optimizer = HiGHS.Optimizer,
+    ) do sp, t
+        # State variables
+        @variable(sp, 0 <= x_soc <= SOC_MAX, SDDP.State, initial_value = SOC_0)
+        @variable(
+            sp,
+            0 <= x_thermal <= THERMAL_MAX,
+            SDDP.State,
+            initial_value = THERMAL_0,
+        )
+        # Thermal output in hour t, committed before the load is observed.
+        @variable(sp, 0 <= u_thermal <= THERMAL_MAX, SDDP.HereAndNow)
+        @constraint(sp, x_thermal.out == u_thermal)
+        @constraint(sp, u_thermal - x_thermal.in <= RAMP_UP)
+        # Recourse controls
+        @variable(sp, 0 <= u_charge <= CHARGE_MAX)
+        @variable(sp, 0 <= u_discharge <= CHARGE_MAX)
+        @variable(sp, u_slack >= 0)
+        @variable(sp, u_surplus >= 0)
+        # Random variable
+        @variable(sp, w_load)
+        SDDP.parameterize(ω -> fix(w_load, NET_LOAD[t] + ω), sp, Ω)
+        # Objective and constraints
+        @stageobjective(sp, FUEL_COST * u_thermal + VOLL * u_slack)
+        @constraint(
+            sp,
+            x_soc.out == x_soc.in + EFFICIENCY * u_charge - u_discharge,
+        )
+        @constraint(
+            sp,
+            λ,
+            u_thermal + u_discharge - u_charge + u_slack == w_load + u_surplus,
+        )
         return
     end
 end
