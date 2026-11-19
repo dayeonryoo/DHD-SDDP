@@ -165,7 +165,7 @@ function _check_backward_sampling_scheme(scheme::AbstractBackwardSamplingScheme)
     if !(scheme isa CompleteSampler)
         error(
             "`$(typeof(scheme))` is not supported for DHD nodes. Use " *
-            "`SDDP.CompleteSampler().",
+            "`SDDP.CompleteSampler()`.",
         )
     end
     return
@@ -177,6 +177,45 @@ function _throw_if_dhd_duality_handler(model::PolicyGraph, duality_handler)
         error(
             "`SDDP.simulate` does not support a `duality_handler` for DHD nodes yet."
         )
+    end
+    return
+end
+
+"Error if `train` is given an option that DHD nodes do not support yet."
+function _throw_if_dhd_train_options(
+    model::PolicyGraph;
+    cut_type,
+    risk_measure,
+    root_node_risk_measure,
+    forward_pass,
+    forward_pass_resampling_probability,
+    backward_sampling_scheme,
+    duality_handler,
+    parallel_scheme,
+)
+    if !any(is_dhd, values(model.nodes))
+        return
+    end
+    risk_measures = values(to_nodal_form(model, risk_measure))
+    supported = [
+        "cut_type" => cut_type == SINGLE_CUT,
+        "risk_measure" => all(r -> r isa Expectation, risk_measures),
+        "root_node_risk_measure" => root_node_risk_measure isa Expectation,
+        "forward_pass" => forward_pass isa DefaultForwardPass,
+        "forward_pass_resampling_probability" =>
+            forward_pass_resampling_probability === nothing,
+        "backward_sampling_scheme" =>
+            backward_sampling_scheme isa CompleteSampler,
+        "duality_handler" => duality_handler isa ContinuousConicDuality,
+        "parallel_scheme" => parallel_scheme isa Serial,
+    ]
+    for (name, ok) in supported
+        if !ok
+            error("`SDDP.train` does not support this `$name` for DHD nodes yet.")
+        end
+    end
+    if any(node -> (is_dhd(node) && node.has_integrality), values(model.nodes))
+        error("`SDDP.train` does not support integer variables in DHD nodes yet.")
     end
     return
 end

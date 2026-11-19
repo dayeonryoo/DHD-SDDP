@@ -214,10 +214,6 @@ function test_unsupported_functions_error()
     model = _small_model()
     set_optimizer(model, HiGHS.Optimizer)
     @test_throws(
-        ErrorException("`SDDP.train` does not support DHD nodes yet."),
-        SDDP.train(model; iteration_limit = 1, print_level = 0)
-    )
-    @test_throws(
         ErrorException("`SDDP.deterministic_equivalent` does not support DHD nodes yet."),
         SDDP.deterministic_equivalent(model, HiGHS.Optimizer)
     )

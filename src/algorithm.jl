@@ -1183,7 +1183,17 @@ function train(
     forward_pass_callback::Function = (x) -> nothing,
     post_iteration_callback = result -> nothing,
 )
-    _throw_if_dhd(model, "train")
+    _throw_if_dhd_train_options(
+        model;
+        cut_type,
+        risk_measure,
+        root_node_risk_measure,
+        forward_pass,
+        forward_pass_resampling_probability,
+        backward_sampling_scheme,
+        duality_handler,
+        parallel_scheme,
+    )
 
     if any(node -> node.objective_state !== nothing, values(model.nodes))
         # FIXME(odow): Threaded is broken for objective states

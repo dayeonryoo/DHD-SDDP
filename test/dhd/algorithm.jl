@@ -541,6 +541,79 @@ function test_decision_rule_dhd()
     return
 end
 
+function test_train_dhd()
+    model = _two_stage_hydro()
+    SDDP.train(model; iteration_limit = 2, print_level = 0)
+    @test SDDP.termination_status(model) == :iteration_limit
+    # The first trial point is below 7, so one iteration finds the exact cut.
+    log = model.most_recent_training_results.log
+    @test log[1].bound ≈ 150
+    @test SDDP.calculate_bound(model) ≈ 150
+    sims = SDDP.simulate(model, 10)
+    for sim in sims
+        w = sim[1][:noise_term]
+        @test sum(s[:stage_objective] for s in sim) ≈ 20 * (10 - w)
+    end
+    return
+end
+
+function test_train_unsupported_options()
+    model = _two_stage_hydro()
+    for kwargs in [
+        (cut_type = SDDP.MULTI_CUT,),
+        (risk_measure = SDDP.AVaR(0.5),),
+        (root_node_risk_measure = SDDP.WorstCase(),),
+        (forward_pass = SDDP.RevisitingForwardPass(),),
+        (forward_pass_resampling_probability = 0.1,),
+        (backward_sampling_scheme = SDDP.MonteCarloSampler(1),),
+        (duality_handler = SDDP.LagrangianDuality(),),
+        (parallel_scheme = SDDP.Threaded(),),
+    ]
+        name = only(keys(kwargs))
+        @test_throws(
+            ErrorException(
+                "`SDDP.train` does not support this `$name` for DHD nodes yet."
+            ),
+            SDDP.train(model; iteration_limit = 1, print_level = 0, kwargs...),
+        )
+    end
+    return
+end
+
+function test_train_integer_error()
+    model1 = SDDP.LinearPolicyGraph(;
+        stages = 1,
+        lower_bound = 0.0,
+        optimizer = HiGHS.Optimizer,
+    ) do sp, t
+        @variable(sp, x >= 0, SDDP.State, initial_value = 0.0)
+        @variable(sp, 0 <= u <= 1, Int, SDDP.HereAndNow)
+        @stageobjective(sp, u)
+    end
+    @test_throws(
+        ErrorException(
+            "`SDDP.train` does not support integer variables in DHD nodes yet."
+        ),
+        SDDP.train(model1; iteration_limit = 1, print_level = 0),
+    )
+    model2 = SDDP.LinearPolicyGraph(;
+        stages = 1,
+        lower_bound = 0.0,
+        optimizer = HiGHS.Optimizer,
+    ) do sp, t
+        @variable(sp, x >= 0, Int, SDDP.State, initial_value = 0.0)
+        @variable(sp, 0 <= u <= 1, SDDP.HereAndNow)
+        @stageobjective(sp, u)
+    end
+    @test_throws(
+        ErrorException(
+            "`SDDP.train` does not support integer variables in DHD nodes yet."
+        ),
+        SDDP.train(model2; iteration_limit = 1, print_level = 0),
+    )
+    return
+end
+
 end # module
 
 TestDHDAlgorithm.runtests()
