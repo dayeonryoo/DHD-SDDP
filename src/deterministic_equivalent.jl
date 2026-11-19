@@ -14,6 +14,7 @@ struct ScenarioTreeNode{T}
     probability::Float64
     children::Vector{ScenarioTreeNode{T}}
     states::Dict{Symbol,State{JuMP.VariableRef}}
+    here_and_now::Dict{JuMP.VariableRef,JuMP.VariableRef}
 end
 
 struct ScenarioTree{T}
@@ -39,6 +40,7 @@ function add_node_to_scenario_tree(
     else
         check_time_limit()
     end
+    _throw_if_here_and_now_fixed(node) # Node has lost its here-and-now bounds.
     for noise in node.noise_terms
         scenario_node = ScenarioTreeNode(
             node,
@@ -46,6 +48,7 @@ function add_node_to_scenario_tree(
             probability * noise.probability,
             ScenarioTreeNode{T}[],
             Dict{Symbol,State{JuMP.VariableRef}}(),
+            Dict{JuMP.VariableRef,JuMP.VariableRef}(),
         )
         for child in node.children
             add_node_to_scenario_tree(
@@ -163,6 +166,10 @@ function add_scenario_to_ef(
         child.states[key] =
             State(var_src_to_dest[state.in], var_src_to_dest[state.out])
     end
+    # Record the copies of the here-and-now variables.
+    for u in node.here_and_now
+        child.here_and_now[u] = var_src_to_dest[u]
+    end
     # Recurse down the tree.
     for child_2 in child.children
         add_scenario_to_ef(model, child_2, check_time_limit)
@@ -182,6 +189,7 @@ function add_linking_constraints(
         end
         add_linking_constraints(model, child, check_time_limit)
     end
+    _add_non_anticipativity_constraints(model, node.children)
     return
 end
 
@@ -209,9 +217,6 @@ function deterministic_equivalent(
     optimizer = nothing;
     time_limit::Union{Real,Nothing} = 60.0,
 ) where {T}
-
-    _throw_if_dhd(pg, "deterministic_equivalent") # Error: does not support DHD yet
-
     # Step 0: helper function for the time limit.
     start_time = time()
     time_limit = time_limit === nothing ? typemax(Float64) : Float64(time_limit)
@@ -247,6 +252,8 @@ function deterministic_equivalent(
             JuMP.fix(child.states[key].in, value; force = true)
         end
     end
+    # Linking the root's children.
+    _add_non_anticipativity_constraints(model, tree.children)
     # Return the model
     return model
 end

@@ -69,6 +69,7 @@ include("visualization/plot_graph.jl")
 
 # Other solvers.
 include("deterministic_equivalent.jl")
+include("dhd/deterministic_equivalent.jl")
 include("biobjective.jl")
 include("alternative_forward.jl")
 
