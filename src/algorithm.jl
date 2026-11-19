@@ -1423,14 +1423,25 @@ function _simulate(
                 current_belief = Dict(node_index => 1.0)
             end
             # Solve the subproblem.
-            subproblem_results = solve_subproblem(
-                model,
-                node,
-                incoming_state,
-                noise,
-                scenario_path[1:depth];
-                duality_handler = duality_handler,
-            )
+            if is_dhd(node)
+                # Joint solve, fix the here-and-now values, and recourse solve.
+                subproblem_results = solve_dhd_node(
+                    model,
+                    node,
+                    incoming_state,
+                    noise,
+                    scenario_path[1:depth],
+                )
+            else
+                subproblem_results = solve_subproblem(
+                    model,
+                    node,
+                    incoming_state,
+                    noise,
+                    scenario_path[1:depth];
+                    duality_handler = duality_handler,
+                )
+            end
             # Add the stage-objective
             cumulative_value += subproblem_results.stage_objective
             # Record useful variables from the solve.
@@ -1592,8 +1603,7 @@ function simulate(
     parallel_scheme::AbstractParallelScheme = Serial(),
     incoming_state::Dict{String,Float64} = _initial_state(model),
 )
-    _throw_if_dhd(model, "simulate")
-
+    _throw_if_dhd_duality_handler(model, duality_handler)
     return _simulate(
         model,
         parallel_scheme,
@@ -1647,7 +1657,6 @@ struct DecisionRule{T}
     model::PolicyGraph{T}
     node::Node{T}
     function DecisionRule(model::PolicyGraph{T}; node::T) where {T}
-        _throw_if_dhd(model, "DecisionRule")
         return new{T}(model, model[node])
     end
 end
@@ -1754,14 +1763,25 @@ function evaluate(
     noise = nothing,
     controls_to_record = Symbol[],
 ) where {T}
-    ret = solve_subproblem(
-        rule.model,
-        rule.node,
-        incoming_state,
-        noise,
-        Tuple{T,Any}[];
-        duality_handler = nothing,
-    )
+    if is_dhd(rule.node)
+        # First the here-and-now rule, then the recourse rule for `noise`.
+        ret = solve_dhd_node(
+            rule.model,
+            rule.node,
+            incoming_state,
+            noise,
+            Tuple{T,Any}[],
+        )
+    else
+        ret = solve_subproblem(
+            rule.model,
+            rule.node,
+            incoming_state,
+            noise,
+            Tuple{T,Any}[];
+            duality_handler = nothing,
+        )
+    end
     return (
         stage_objective = ret.stage_objective,
         outgoing_state = ret.state,

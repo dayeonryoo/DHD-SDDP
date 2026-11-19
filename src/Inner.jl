@@ -852,6 +852,7 @@ function inner_dp(
     print_level::Int = 1,
     vertex_selection_tol::Float64 = 1e-6,
 )
+    SDDP._throw_if_dhd(pb, "Inner.inner_dp")
     pb_inner = SDDP.LinearPolicyGraph(
         build;
         stages,

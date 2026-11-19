@@ -488,6 +488,59 @@ function test_backward_pass_monte_carlo_error()
     return
 end
 
+function test_simulate_dhd()
+    model = _two_stage_hydro()
+    _add_exact_cut(model)
+    sims = SDDP.simulate(model, 10, [:u_thermal, :x_storage])
+    for sim in sims
+        @test length(sim) == 2
+        w = sim[1][:noise_term]
+        # The here-and-now values are recorded from the fixed template.
+        @test 1 - 1e-6 <= sim[1][:u_thermal] <= 7 + 1e-6
+        x = sim[1][:x_storage].out
+        @test sim[2][:u_thermal] ≈ 7 - x
+        # θ = 140 - 20x' at stage 1, and 0 at stage 2 (leaf).
+        @test sim[1][:bellman_term] ≈ 140 - 20 * x
+        @test sim[2][:bellman_term] ≈ 0 atol = 1e-6
+        @test sum(s[:stage_objective] for s in sim) ≈ 20 * (10 - w)
+    end
+    return
+end
+
+function test_simulate_dhd_duality_handler_error()
+    model= _two_stage_hydro()
+    @test_throws(
+        ErrorException(
+            "`SDDP.simulate` does not support a `duality_handler` for DHD nodes yet."
+        ),
+        SDDP.simulate(
+            model,
+            1;
+            duality_handler = SDDP.ContinuousConicDuality(),
+        )
+    )
+    return
+end
+
+function test_decision_rule_dhd()
+    model = _two_stage_hydro()
+    rule = SDDP.DecisionRule(model; node = 2)
+    for w in (2.0, 3.0)
+        result = SDDP.evaluate(
+            rule;
+            incoming_state = Dict(:x_storage => 3.0),
+            noise = w,
+            controls_to_record = [:u_thermal, :u_hydro],
+        )
+        # The commitment is u_thermal = max(0, 7 - x) = 4 at x = 3 for both noises.
+        # u_hydro = 9 - u_thermal = 5, and the stage cost is 20 * u_thermal.
+        @test result.controls[:u_thermal] ≈ 4
+        @test result.controls[:u_hydro] ≈ 5
+        @test result.stage_objective ≈ 80
+    end
+    return
+end
+
 end # module
 
 TestDHDAlgorithm.runtests()

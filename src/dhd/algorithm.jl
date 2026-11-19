@@ -170,3 +170,13 @@ function _check_backward_sampling_scheme(scheme::AbstractBackwardSamplingScheme)
     end
     return
 end
+
+"Error if `model` has DHD nodes and `simulate` is given a duality handler."
+function _throw_if_dhd_duality_handler(model::PolicyGraph, duality_handler)
+    if duality_handler !== nothing && any(is_dhd, values(model.nodes))
+        error(
+            "`SDDP.simulate` does not support a `duality_handler` for DHD nodes yet."
+        )
+    end
+    return
+end

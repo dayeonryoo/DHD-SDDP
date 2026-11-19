@@ -218,16 +218,23 @@ function test_unsupported_functions_error()
         SDDP.train(model; iteration_limit = 1, print_level = 0)
     )
     @test_throws(
-        ErrorException("`SDDP.simulate` does not support DHD nodes yet."),
-        SDDP.simulate(model, 1)
-    )
-    @test_throws(
         ErrorException("`SDDP.deterministic_equivalent` does not support DHD nodes yet."),
         SDDP.deterministic_equivalent(model, HiGHS.Optimizer)
     )
     @test_throws(
-        ErrorException("`SDDP.DecisionRule` does not support DHD nodes yet."),
-        SDDP.DecisionRule(model; node = 1)
+        ErrorException("`SDDP.Inner.inner_dp` does not support DHD nodes yet."),
+        SDDP.Inner.inner_dp(
+            (sp, t) -> nothing,
+            model;
+            stages = 1,
+            optimizer = HiGHS.Optimizer,
+            bellman_function = nothing,
+            risk_measure = SDDP.Expectation(),
+        )
+    )
+    @test_throws(
+        ErrorException("`SDDP.write_to_file` does not support DHD nodes yet."),
+        write(IOBuffer(), model)
     )
     return
 end

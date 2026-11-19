@@ -172,6 +172,7 @@ function Base.write(
     _throw_if_belief_states(model)
     _throw_if_objective_states(model)
     _throw_if_exisiting_cuts(model)
+    _throw_if_dhd(model, "write_to_file")
     nodes = Dict{String,Any}()
     subproblems = Dict{String,Any}()
     scenario_map = Dict{T,Any}()
