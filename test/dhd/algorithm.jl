@@ -614,6 +614,76 @@ function test_train_integer_error()
     return
 end
 
+"Simple hydro from the examples with `stages` DHD stages, or its DH-aug twin."
+function _simple_hydro(; stages::Int, dhd::Bool, Ω = [2.0, 3.0], voll = 500)
+    return SDDP.LinearPolicyGraph(;
+        stages = dhd ? stages : stages + 1,
+        lower_bound = 0.0,
+        optimizer = HiGHS.Optimizer,
+    ) do sp, t
+        @variable(sp, 0 <= x_storage <= 8, SDDP.State, initial_value = 6)
+        if dhd
+            @variable(sp, 0 <= u_thermal <= 9, SDDP.HereAndNow)
+            thermal = u_thermal
+        else
+            @variable(sp, 0 <= u_thermal <= 9, SDDP.State, initial_value = 0)
+            thermal = u_thermal.in
+            if t == 1
+                @constraint(sp, x_storage.out == x_storage.in)
+                @stageobjective(sp, 0.0)
+                return
+            end
+        end
+        @variable(sp, u_hydro >= 0)
+        @variable(sp, u_spill >= 0)
+        @variable(sp, u_unmet_demand >= 0)
+        @variable(sp, w_inflow)
+        SDDP.parameterize(ω -> fix(w_inflow, ω), sp, Ω)
+        @constraint(sp, thermal + u_hydro == 9 - u_unmet_demand)
+        @constraint(
+            sp,
+            x_storage.out == x_storage.in - u_hydro - u_spill + w_inflow
+        )
+        @stageobjective(sp, voll * u_unmet_demand + 20 * thermal)
+    end
+end
+
+"Exact optimum of the DH-aug twin from its deterministic equivalent."
+function _dh_aug_optimum(; kwargs...)
+    model = _simple_hydro(; dhd = false, kwargs...)
+    det = SDDP.deterministic_equivalent(model, HiGHS.Optimizer)
+    set_silent(det)
+    optimize!(det)
+    return objective_value(det)
+end
+
+"Expected cost of the policy in `model` over every equally likely inflow path."
+function _policy_cost(model, Ω, stages)
+    total = 0.0
+    paths = Iterators.product(ntuple(_ -> Ω, stages)...) # Ω × Ω × Ω × Ω
+    for w in paths
+        path = [(t, w[t]) for t in 1:stages]
+        scheme = SDDP.Historical(path)
+        sim = only(SDDP.simulate(model, 1; sampling_scheme = scheme))
+        total += sum(s[:stage_objective] for s in sim)
+    end
+    return total / length(paths)
+end
+
+function test_train_matches_dh_aug()
+    # The tutorial's decision-hazard model has the documented optimum $410.
+    @test _dh_aug_optimum(; stages = 4) ≈ 410
+    # The tutorial's model, and a variant where unmet deemand is cheaper.
+    for (Ω, voll) in [([2.0, 3.0], 500), ([0.0, 2.0, 4.0], 50)]
+        exact = _dh_aug_optimum(; stages = 4, Ω, voll)
+        model = _simple_hydro(; stages = 4, dhd = true, Ω, voll)
+        SDDP.train(model; iteration_limit = 10, print_level = 0)
+        @test SDDP.calculate_bound(model) ≈ exact
+        @test _policy_cost(model, Ω, 4) ≈ exact
+    end
+    return
+end
+
 end # module
 
 TestDHDAlgorithm.runtests()
