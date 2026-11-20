@@ -35,6 +35,7 @@ JuliaLocalPreferences.toml
 examples/*.log
 examples/*.html
 examples/*.png
+examples/*.csv
 
 # Files written by the test suite
 test/*.log

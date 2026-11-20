@@ -14,13 +14,43 @@ path.
 To see every change made on top of SDDP.jl, diff against the commit that
 imported it.
 
+## Decision-hazard-decision nodes
+
+Tag a control that must be chosen before the noise of its node is observed:
+
+```julia
+@variable(sp, 0 <= u_thermal <= 9, SDDP.HereAndNow)
+```
+
+A node with here-and-now variables becomes a decision-hazard-decision (DHD)
+node: its here-and-now controls are chosen against every noise of the node, and
+its other controls after the noise is observed. The cost-to-go functions stay
+in the space of the original state variables.
+
+Supported for DHD nodes:
+
+- `SDDP.train` with the expectation, single cuts, `DefaultForwardPass`,
+  `CompleteSampler`, `ContinuousConicDuality` and `Serial`
+- `SDDP.simulate`, `SDDP.calculate_bound`, `SDDP.DecisionRule` and
+  `SDDP.evaluate`
+- `SDDP.deterministic_equivalent`
+- writing, reading and re-adding cuts
+
+Markovian policy graphs run under the expectation but are not validated yet.
+The following raise an error for DHD nodes: other risk measures, multi-cut,
+other forward passes, backward samplers, duality handlers and parallel schemes,
+integer variables, objective and belief states, `SDDP.write_to_file` and
+`SDDP.Inner.inner_dp`.
+
 ## Layout
 
 ```
 src/            SDDP.jl source; DHD-specific code lives in src/dhd/
 test/           SDDP.jl tests (unchanged, used as a regression suite);
-                DHD tests live in test/dhd/, one file per src/dhd/ file
-examples/       HD and augmented-DH toy models used to validate the DHD solver
+                DHD tests live in test/dhd/: one file per src/dhd/ file, and
+                validation.jl, which checks the examples against augmented DH
+examples/       hydro and battery models in HD, augmented-DH and DHD form,
+                and a script that compares DHD and augmented-DH training
 ```
 
 ## Usage
@@ -38,11 +68,11 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 Run a single test file:
 
 ```
-julia --project=test test/dhd/expansion.jl
+julia --project=test test/dhd/algorithm.jl
 ```
 
-Run an example:
+Compare DHD and augmented-DH training on the examples:
 
 ```
-julia --project=examples examples/hydro_dh_aug.jl
+julia --project=examples examples/compare_dhd_dh_aug.jl
 ```
