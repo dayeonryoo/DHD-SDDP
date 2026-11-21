@@ -6,10 +6,10 @@
 #  License, v. 2.0. If a copy of the MPL was not distributed with this
 #  file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-# Shared data and model builders for two hydro-thermal examples. In both, the
-# decision-hazard (DH) version commits thermal output one stage ahead by adding
-# u_thermal as a state variable. Unlike the battery example, this genuinely
-# augments the state:
+# Shared data and model builders for two hydro-thermal examples. In the first
+# two, the decision-hazard (DH) version commits thermal output one stage ahead
+# by adding u_thermal as a state variable. Unlike the battery example, this
+# genuinely augments the state:
 #
 #   hazard-decision (HD) state:  x_storage              (1 dimension)
 #   augmented DH state:          x_storage, u_thermal   (2 dimensions)
@@ -24,6 +24,8 @@
 #                       0.95 per year; here the same discount multiplies each
 #                       year's costs instead, so every model is a linear
 #                       policy graph.
+# 3. markovian_hydro_*: the simple hydro model on a Markovian policy graph,
+#                       with a dry and a wet climate.
 #
 # Changes from the documented models, needed so that every subproblem is feasible
 # for every committed thermal output, and chosen so that the HD optimum is unchanged:
@@ -389,6 +391,122 @@ function seasonal_hydro_dhd(;
                 SURPLUS_COST * u_surplus
             ),
         )
+        return
+    end
+end
+
+# ===========================================================================
+# 3. Markovian hydro: simple hydro with a dry and a wet climate
+# ===========================================================================
+#
+# Climate m known -> commit u_thermal -> inflow ω seen -> recourse
+# -> move to the next climate.
+#
+# The DH-aug trick of sections 1 and 2 is not equivalent here, because it
+# commits thermal output before the next climate is known.
+
+"Equally likely inflows in the dry (1) and wet (2) climate."
+const MARKOV_INFLOW = [[1.0, 2.0], [3.0, 4.0]]
+"Probabilities of the climate in stage 1."
+const MARKOV_INITIAL = [0.5 0.5]
+"Next-climate probabilities given the current one; dry spells last longer."
+const MARKOV_TRANSITION = [0.8 0.2; 0.3 0.7]
+
+"Add the recourse controls, inflow and costs of climate `m` to `sp`."
+function _add_markovian_recourse!(sp, x_storage, thermal, m::Int)
+    @variable(sp, u_hydro >= 0)
+    @variable(sp, u_spill >= 0)
+    @variable(sp, u_unmet_demand >= 0)
+    @variable(sp, w_inflow)
+    SDDP.parameterize(ω -> fix(w_inflow, ω), sp, MARKOV_INFLOW[m])
+    @constraint(sp, thermal + u_hydro == SIMPLE_DEMAND - u_unmet_demand)
+    @constraint(
+        sp,
+        x_storage.out == x_storage.in - u_hydro - u_spill + w_inflow,
+    )
+    @stageobjective(
+        sp,
+        SIMPLE_VOLL * u_unmet_demand + SIMPLE_THERMAL_COST * thermal,
+    )
+    return
+end
+
+"DHD model in which node `(t, m)` commits u_thermal before the inflow."
+function markovian_hydro_dhd(; T::Int = 3)
+    return SDDP.MarkovianPolicyGraph(;
+        transition_matrices = [
+            MARKOV_INITIAL,
+            fill(MARKOV_TRANSITION, T - 1)...,
+        ],
+        sense = :Min,
+        lower_bound = 0.0,
+        optimizer = HiGHS.Optimizer,
+    ) do sp, node
+        t, m = node
+        @variable(
+            sp,
+            0 <= x_storage <= SIMPLE_STORAGE_MAX,
+            SDDP.State,
+            initial_value = SIMPLE_STORAGE_0,
+        )
+        @variable(sp, 0 <= u_thermal <= SIMPLE_DEMAND, SDDP.HereAndNow)
+        _add_markovian_recourse!(sp, x_storage, u_thermal, m)
+        return
+    end
+end
+
+"Equivalent HD model, with a commit node and a recourse node per Markov node."
+function markovian_hydro_split(; T::Int = 3)
+    climates = 1:size(MARKOV_TRANSITION, 1)
+    graph = SDDP.Graph((0, 0, :root))
+    for t in 1:T, m in climates, step in (:commit, :recourse)
+        SDDP.add_node(graph, (t, m, step))
+    end
+    for m in climates
+        SDDP.add_edge(
+            graph,
+            (0, 0, :root) => (1, m, :commit),
+            MARKOV_INITIAL[1, m],
+        )
+    end
+    for t in 1:T, m in climates
+        SDDP.add_edge(graph, (t, m, :commit) => (t, m, :recourse), 1.0)
+        if t < T
+            for m_next in climates
+                SDDP.add_edge(
+                    graph,
+                    (t, m, :recourse) => (t + 1, m_next, :commit),
+                    MARKOV_TRANSITION[m, m_next],
+                )
+            end
+        end
+    end
+    return SDDP.PolicyGraph(
+        graph;
+        sense = :Min,
+        lower_bound = 0.0,
+        optimizer = HiGHS.Optimizer,
+    ) do sp, node
+        t, m, step = node
+        @variable(
+            sp,
+            0 <= x_storage <= SIMPLE_STORAGE_MAX,
+            SDDP.State,
+            initial_value = SIMPLE_STORAGE_0,
+        )
+        # The initial value is never used: every path starts at a commit node.
+        @variable(
+            sp,
+            0 <= u_thermal <= SIMPLE_DEMAND,
+            SDDP.State,
+            initial_value = 0.0,
+        )
+        if step == :commit
+            @constraint(sp, x_storage.out == x_storage.in)
+            @stageobjective(sp, 0.0)
+        else
+            _add_markovian_recourse!(sp, x_storage, u_thermal.in, m)
+        end
         return
     end
 end
