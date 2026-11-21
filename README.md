@@ -36,7 +36,13 @@ Supported for DHD nodes:
 - `SDDP.deterministic_equivalent`
 - writing, reading and re-adding cuts
 
-Markovian policy graphs run under the expectation but are not validated yet.
+Markovian policy graphs are supported and validated on finite horizons. In a
+DHD node, the Markov state is known before the here-and-now controls are
+chosen, and the transition to the next Markov state happens after the other
+controls are chosen. The augmented-DH formulation commits one stage ahead,
+before the next Markov state is known, so it is not equivalent on these
+graphs.
+
 The following raise an error for DHD nodes: other risk measures, multi-cut,
 other forward passes, backward samplers, duality handlers and parallel schemes,
 integer variables, objective and belief states, `SDDP.write_to_file` and
@@ -48,9 +54,10 @@ integer variables, objective and belief states, `SDDP.write_to_file` and
 src/            SDDP.jl source; DHD-specific code lives in src/dhd/
 test/           SDDP.jl tests (unchanged, used as a regression suite);
                 DHD tests live in test/dhd/: one file per src/dhd/ file, and
-                validation.jl, which checks the examples against augmented DH
+                validation.jl, which checks the examples against their
+                augmented-DH or split HD equivalents
 examples/       hydro and battery models in HD, augmented-DH and DHD form,
-                and a script that compares DHD and augmented-DH training
+                a Markovian hydro model in DHD and split HD form, and a script that compares DHD and augmented-DH training
 ```
 
 ## Usage
