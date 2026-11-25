@@ -12,6 +12,10 @@ module Batteries
 include(joinpath(@__DIR__, "..", "..", "examples", "batteries_models.jl"))
 end
 
+module Portfolio
+include(joinpath(@__DIR__, "..", "..", "examples", "portfolio_models.jl"))
+end
+
 function runtests()
     for name in names(@__MODULE__; all = true)
         if startswith("$(name)", "test_")
@@ -117,6 +121,61 @@ function test_markovian_hydro_cut_sharing()
     model = Hydro.markovian_hydro_dhd()
     SDDP.train(model; iteration_limit = 1, print_level = 0)
     @test SDDP.calculate_bound(model) ≈ 285 rtol = 1e-6
+    return
+end
+
+function test_portfolio_quadrature()
+    # Probabilities sum to one and mean return matches exp(μ Δt) - 1.
+    Ω, P = Portfolio.gbm_returns(10)
+    μ, Δt = only(Portfolio.MU), Portfolio.DT
+    @test sum(P) ≈ 1
+    @test sum(P .* first.(Ω)) ≈ exp(μ * Δt) - 1 rtol = 1e-10
+    # No arbitrage.
+    Ω, _ = Portfolio.gbm_returns(2)
+    @test minimum(first.(Ω)) < 0 < maximum(first.(Ω))
+    # Log-returns of two correlated assets have the exact mean and covariance.
+    μ, σ, C = [0.08, 0.05], [0.2, 0.15], [1 0.5; 0.5 1]
+    Ω, P = Portfolio.gbm_returns(3; μ, σ, C)
+    Y = [log.(1 .+ R) for R in Ω]
+    ȳ = sum(P .* Y)
+    cov = sum(P[k] * (Y[k] - ȳ) * (Y[k] - ȳ)' for k in eachindex(P))
+    @test length(Ω) == 9
+    @test ȳ ≈ (μ .- σ .^2 ./ 2) .* Δt atol = 1e-12
+    @test cov ≈ Δt .* σ .* C .* σ' atol = 1e-12
+end
+
+function test_portfolio_one_period_references()
+    ρ, U_MAX = Portfolio.RHO, Portfolio.U_MAX
+    # Newton matches the closed form for two equally likely returns.
+    Ω, P = Portfolio.gbm_returns(2)
+    R_m, R_p = only.(Ω)
+    _, U = Portfolio.one_period_optimum(Ω, P)
+    @test only(U) ≈ log(-R_p / R_m) / (ρ * (R_p - R_m)) rtol = 1e-10
+    # Newton's minimum matches a fine grid search, and investing beats U = 0.
+    Ω, P = Portfolio.gbm_returns(5)
+    m, U = Portfolio.one_period_optimum(Ω, P)
+    f(U) = sum(p * exp(-ρ * only(R) * U) for (R, p) in zip(Ω, P))
+    grid = range(-U_MAX, U_MAX; length = 400_001)
+    @test minimum(f, grid) ≈ m rtol = 1e-8
+    @test m < 1
+    # Two correlated assets: Newton's minimizer is stable.
+    Ω2, P2 = Portfolio.gbm_returns(3; μ = [0.08, 0.05], σ = [0.2, 0.15], C = [1 0.5; 0.5 1])
+    m2, U2 = Portfolio.one_period_optimum(Ω2, P2)
+    f2(U) = sum(p * exp(-ρ * (R' * U)) for (R, p) in zip(Ω2, P2))
+    @test all(f2(U2 + d) >= m2 for d in ([1e-3, 0], [-1e-3, 0], [0, 1e-3], [0, -1e-3]))
+    # The tangent loss lies below exp(ρ u) / ρ and touches it at each tangent point.
+    @test all(Portfolio.tangent_loss(u) <= exp(ρ * u) / ρ + 1e-12 for u in -3:0.01:3)
+    @test all(Portfolio.tangent_loss(a) ≈ exp(ρ * a) / ρ for a in Portfolio.TANGENTS)
+    for X in -1.0:0.5:1.0
+        v, U_lp = Portfolio.one_period_lp_optimum(Ω, P, X)
+        f_lp(U) = sum(p * Portfolio.tangent_loss(-X - only(R) * U) for (R, p) in zip(Ω, P))
+        # The breakpoint minimum is exact, so a grid can only match it from above.
+        @test f_lp(U_lp) ≈ v
+        @test minimum(f_lp, grid) >= v - 1e-12
+        @test minimum(f_lp, grid) ≈ v atol = 1e-4
+        # The tangent loss is below the exponential loss, so its optimum is too.
+        @test v <= m * exp(-ρ * X) / ρ
+    end
     return
 end
 
