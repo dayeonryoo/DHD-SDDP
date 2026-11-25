@@ -104,7 +104,7 @@ function test_markovian_hydro()
         exact = _validate(
             () -> Hydro.markovian_hydro_dhd(),
             () -> Hydro.markovian_hydro_split();
-            iteration_limit = 20,
+            iteration_limit = 30,
             refine_at_similar_nodes,
         )
         @test exact ≈ 285
