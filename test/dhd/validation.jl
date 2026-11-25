@@ -179,6 +179,51 @@ function test_portfolio_one_period_references()
     return
 end
 
+function test_portfolio_lp_last_node()
+    # With T = 1, the joint subproblem is the whole one-period problem, with no cuts.
+    Ω, P = Portfolio.gbm_returns(5)
+    model = Portfolio.portfolio_dhd(; T = 1, returns = (Ω, P))
+    node = model[1]
+    @test length(node.dhd.recourse_copies) == length(Ω)
+    v(X) = first(Portfolio.one_period_lp_optimum(Ω, P, X))
+    for X in -1.0:0.5:1.0
+        joint = SDDP.solve_joint_subproblem(
+            model,
+            node,
+            Dict(:x => X);
+            duality_handler = SDDP.ContinuousConicDuality(),
+        )
+        # The joint value is the exact one-period minimum.
+        @test joint.objective ≈ v(X) rtol = 1e-8
+        # The commited holding attains that minimum.
+        u = only(values(joint.here_and_now)) # Might not be unique here.
+        f_lp(U) = sum(p * Portfolio.tangent_loss(-X - only(R) * U) for (R, p) in zip(Ω, P))
+        @test f_lp(u) ≈ v(X) rtol = 1e-8
+        @test abs(u) < Portfolio.U_MAX
+        # The dual of x.in lies between the left and right slopes of v, i.e. subgradient.
+        h = 1e-6
+        @test (v(X) - v(X - h)) / h - 1e-6 <= joint.duals[:x] <= (v(X + h) - v(X)) / h + 1e-6
+    end
+    @test SDDP.calculate_bound(model) ≈ v(Portfolio.WEALTH_0) rtol = 1e-8
+    return
+end
+
+function test_portfolio_lp_dh_aug()
+    Ω, P = Portfolio.gbm_returns(5)
+    optima = Float64[]
+    for T in 1:3
+        dhd = _exact(Portfolio.portfolio_dhd(; T, returns = (Ω, P)))
+        dh_aug = _exact(Portfolio.portfolio_dh_aug(; T, returns = (Ω, P)))
+        @test dhd ≈ dh_aug rtol = 1e-6
+        push!(optima, dhd)
+    end
+    # With one period, both match the breakpoint reference.
+    @test optima[1] ≈ first(Portfolio.one_period_lp_optimum(Ω, P, Portfolio.WEALTH_0))
+    # More periods can never hurt.
+    @test optima[3] <= optima[2] <= optima[1]
+    return
+end
+
 end # module
 
 TestDHDValidation.runtests()

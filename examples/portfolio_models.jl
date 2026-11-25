@@ -7,6 +7,7 @@
 using SDDP
 import LinearAlgebra
 using FastGaussQuadrature: gausshermite
+import HiGHS
 
 const MU = [0.08]        # drift per year
 const SIGMA = [0.2]      # volatility per year
@@ -18,7 +19,7 @@ const U_MAX = 20.0       # box on holdings, never binding at the optimum
 "Points u_i where the loss exp(ρu)/ρ is replaced by its tangent."
 const TANGENTS = [-1.0, -0.5, 0.0, 0.5, 1.0]
 
-"Gauss-Hermite returns and probabilities of one period, with n nodes per assset."
+"Gauss-Hermite returns and probabilities of one period, with n nodes per asset."
 function gbm_returns(
     n::Int;
     μ::Vector{Float64} = MU,
@@ -100,11 +101,105 @@ function one_period_lp_optimum(
     f(U) = sum(p * tangent_loss(-X - only(R) * U; ρ, tangents) for (R, p) in zip(Ω, P))
     candidates = [-U_MAX, U_MAX]
     for b in tangent_kinks(; ρ, tangents), R in Ω
-        U = -(X + b) / only(R) # Hitting a kink `b``.
+        U = -(X + b) / only(R) # Hitting a kink `b`.
         if abs(U) <= U_MAX
             push!(candidates, U)
         end
     end
     value, i = findmin(f, candidates)
     return value, candidates[i]
+end
+
+"Add the terminal loss of x.out as a stage cost at node T."
+function _terminal_cost!(sp, x, ρ, tangents)
+    if tangents === nothing # Exponential loss.
+        @variable(sp, z) # z ≥ exp(-ρ X_T) / ρ
+        @constraint(sp, [-ρ * x.out, 1.0, ρ * z] in MOI.ExponentialCone())
+    else # Tangent loss.
+        @variable(sp, z >= 0)
+        for a in tangents
+            @constraint(sp, z >= exp(ρ * a) * (1 / ρ - x.out - a))
+        end
+    end
+    @stageobjective(sp, z)
+    return
+end
+
+"DHD model in which node t commits the holdings u before the return R of t is seen."
+function portfolio_dhd(;
+    T::Int = 3,
+    n::Int = 5,
+    returns = gbm_returns(n),
+    ρ::Float64 = RHO,
+    w::Float64 = WEALTH_0,
+    tangents::Union{Nothing,Vector{Float64}} = TANGENTS,
+    optimizer = HiGHS.Optimizer
+)
+    Ω, P = returns
+    J = length(first(Ω))
+    return SDDP.LinearPolicyGraph(;
+        stages = T,
+        sense = :Min,
+        lower_bound = 0.0,
+        optimizer,
+    ) do sp, t
+        @variable(sp, x, SDDP.State, initial_value = w)
+        @variable(sp, -U_MAX <= u[1:J] <= U_MAX, SDDP.HereAndNow)
+        @constraint(sp, wealth, x.out == x.in + sum(u))
+        SDDP.parameterize(sp, Ω, P) do R
+            for j in 1:J
+                # x.out - x.in - ∑_j R_j u_j = 0.
+                set_normalized_coefficient(wealth, u[j], -R[j])
+            end
+            return
+        end
+        # The loss is charged once at the end.
+        if t == T
+            _terminal_cost!(sp, x, ρ, tangents)
+        else
+            @stageobjective(sp, 0.0)
+        end
+        return
+    end
+end
+
+"DH-aug model: the holdings u are a state variable commited one node before."
+function portfolio_dh_aug(;
+    T::Int = 3,
+    n::Int = 5,
+    returns = gbm_returns(n),
+    ρ::Float64 = RHO,
+    w::Float64 = WEALTH_0,
+    tangents::Union{Nothing,Vector{Float64}} = TANGENTS,
+    optimizer = HiGHS.Optimizer,
+)
+    Ω, P = returns
+    J = length(first(Ω))
+    return SDDP.LinearPolicyGraph(;
+        stages = T + 1,
+        sense = :Min,
+        lower_bound = 0.0,
+        optimizer,
+    ) do sp, node
+        @variable(sp, x, SDDP.State, initial_value = w)
+        @variable(sp, -U_MAX <= u[1:J] <= U_MAX, SDDP.State, initial_value = 0.0)
+        if node == 1
+            @constraint(sp, x.out == x.in)
+            @stageobjective(sp, 0.0)
+        else
+            @constraint(sp, wealth, x.out == x.in + sum(u[j].in for j in 1:J))
+            SDDP.parameterize(sp, Ω, P) do R
+                for j in 1:J
+                    set_normalized_coefficient(wealth, u[j].in, -R[j])
+                end
+                return
+            end
+            if node == T + 1
+                _terminal_cost!(sp, x, ρ, tangents)
+            else
+                @stageobjective(sp, 0.0)
+            end
+        end
+        return
+    end
 end
