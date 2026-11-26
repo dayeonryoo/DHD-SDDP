@@ -725,7 +725,7 @@ function test_train_matches_dh_aug()
     for (Ω, voll) in [([2.0, 3.0], 500), ([0.0, 2.0, 4.0], 50)]
         exact = _dh_aug_optimum(; stages = 4, Ω, voll)
         model = _simple_hydro(; stages = 4, dhd = true, Ω, voll)
-        SDDP.train(model; iteration_limit = 10, print_level = 0)
+        SDDP.train(model; iteration_limit = 30, print_level = 0)
         @test SDDP.calculate_bound(model) ≈ exact
         @test _policy_cost(model, Ω, 4) ≈ exact
     end
