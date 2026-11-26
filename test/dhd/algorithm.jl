@@ -220,6 +220,54 @@ function test_recourse_fixes_here_and_now()
     return
 end
 
+function test_recourse_first_stage_changed_error()
+    model = SDDP.LinearPolicyGraph(;
+        stages = 1,
+        lower_bound = 0.0,
+        optimizer = HiGHS.Optimizer
+    ) do sp, t
+        @variable(sp, x >= 0, SDDP.State, initial_value = 0.0)
+        @variable(sp, u >= 0, SDDP.HereAndNow)
+        @variable(sp, w)
+        @constraint(sp, capacity, u <= 4) # First-stage constraint.
+        @constraint(sp, x.out == x.in + u - w)
+        # The in-sample noises never change the capacity.
+        Ω = [(w = 1.0, capacity = 4.0), (w = 2.0, capacity = 4.0)]
+        SDDP.parameterize(sp, Ω) do ω
+            fix(w, ω.w)
+            set_normalized_rhs(capacity, ω.capacity)
+            return
+        end
+        @stageobjective(sp, u)
+    end
+    node = model[1]
+    here_and_now = Dict(node.subproblem[:u] => 3.0)
+    state, path = Dict(:x => 0.0), Tuple{Int,Any}[]
+    # An unseen noise that leaves the capacity unchanged is fine.
+    result = SDDP.solve_recourse_subproblem(
+        model,
+        node,
+        state,
+        here_and_now,
+        (w = 0.5, capacity = 4.0),
+        path,
+    )
+    @test result.state[:x] ≈ 2.5 # x' = 0 + 3 - 0.5.
+    # An unseen noise that changes the capacity should give an error.
+    @test_throws(
+        "`parameterize` must not modify ",
+        SDDP.solve_recourse_subproblem(
+            model,
+            node,
+            state,
+            here_and_now,
+            (w = 0.5, capacity = 3.0), # although feasible.
+            path,
+        )
+    )
+    return
+end
+
 function test_solve_dhd_node()
     model = _two_stage_hydro()
     _add_exact_cut(model)

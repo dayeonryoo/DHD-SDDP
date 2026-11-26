@@ -10,6 +10,7 @@ end
 struct DHDData
     joint::JuMP.Model
     first_stage::Dict{JuMP.VariableRef,JuMP.VariableRef}
+    first_stage_constraints::Dict{JuMP.ConstraintRef,Any}
     recourse_copies::Vector{RecourseCopy}
     cut_constraints::Dict{Cut,Vector{JuMP.ConstraintRef}}
 end
@@ -47,7 +48,7 @@ end
 
 _is_first_stage(f::Any, first_stage) = false
 
-"Error if parameterize changed a first-stage constraint."
+"Error if `parameterize` changed a first-stage constraint."
 function _check_unchanged(con, obj, first_stage_constraints)
     old = get(first_stage_constraints, con, nothing)
     if old === nothing || !isequal(old.func, obj.func) || old.set != obj.set
@@ -55,6 +56,23 @@ function _check_unchanged(con, obj, first_stage_constraints)
             "`parameterize` must not modify `$con`: it contains only " *
             "here-and-now variables and incoming states.",
         )
+    end
+    return
+end
+
+"Error if `parameterize` changed a first-stage row of the template of `node`."
+function _check_first_stage_unchanged(node::Node)
+    template = node.subproblem
+    for (F, S) in JuMP.list_of_constraint_types(template)
+        if F == JuMP.VariableRef
+            continue # Bounds and fixings are changed at every solve.
+        end
+        for con in JuMP.all_constraints(template, F, S)
+            obj = JuMP.constraint_object(con)
+            if _is_first_stage(obj.func, node.dhd.first_stage)
+                _check_unchanged(con, obj, node.dhd.first_stage_constraints)
+            end
+        end
     end
     return
 end
@@ -117,6 +135,7 @@ function _expand_to_dhd!(node::Node, optimizer, direct_mode::Bool)
     node.dhd = DHDData(
         joint,
         first_stage,
+        first_stage_constraints,
         recourse_copies,
         Dict{Cut,Vector{JuMP.ConstraintRef}}(),
     )

@@ -512,6 +512,9 @@ function solve_subproblem(
     # set the objective.
     set_incoming_state(node, state)
     parameterize(node, noise)
+    if is_dhd(node)
+        _check_first_stage_unchanged(node)
+    end
     pre_optimize_ret = if node.pre_optimize_hook !== nothing
         node.pre_optimize_hook(
             model,
