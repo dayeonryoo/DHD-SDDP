@@ -224,6 +224,34 @@ function test_portfolio_lp_dh_aug()
     return
 end
 
+function test_portfolio_lp()
+    T, n = 3, 3
+    _validate(
+        () -> Portfolio.portfolio_dhd(; T, n),
+        () -> Portfolio.portfolio_dh_aug(; T, n);
+        iteration_limit = 200,
+    )
+    return
+end
+
+function test_portfolio_lp_below_exp()
+    T, n = 3, 5
+    Ω, P = Portfolio.gbm_returns(n)
+    m, _ = Portfolio.one_period_optimum(Ω, P)
+    exp_value = Portfolio.exact_value(T, m)
+    # Each tangent set contains the previous one, so the tangent loss can only rise.
+    tangent_sets = [Portfolio.TANGENTS, collect(-3:0.25:3), collect(-3:0.05:3)]
+    optima = [
+        # Deterministic equivalent of DHD model.
+        _exact(Portfolio.portfolio_dhd(; T, returns = (Ω, P), tangents))
+        for tangents in tangent_sets
+    ]
+    @test optima[1] <= optima[2] <= optima[3]
+    @test optima[3] <= exp_value # Tangents are upper bounded by exact function.
+    @test optima[3] ≈ exp_value rtol = 1e-3 # Close enough with fine tangents.
+    return
+end
+
 end # module
 
 TestDHDValidation.runtests()
