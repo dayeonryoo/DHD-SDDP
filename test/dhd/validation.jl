@@ -3,6 +3,7 @@ module TestDHDValidation
 using SDDP
 using Test
 import HiGHS
+import Clarabel
 
 module Hydro
 include(joinpath(@__DIR__, "..", "..", "examples", "hydro_models.jl"))
@@ -28,8 +29,8 @@ function runtests()
 end
 
 "Exact optimum of `model` from its deterministic equivalent."
-function _exact(model)
-    det = SDDP.deterministic_equivalent(model, HiGHS.Optimizer)
+function _exact(model; optimizer = HiGHS.Optimizer)
+    det = SDDP.deterministic_equivalent(model, optimizer)
     set_silent(det)
     optimize!(det)
     return objective_value(det)
@@ -61,14 +62,20 @@ function _path_cost(model, children, path, probability)
 end
 
 "Check that `dhd()` matches `reference()` and that training finds the optimum."
-function _validate(dhd, reference; iteration_limit, kwargs...)
-    exact = _exact(reference())
-    @test _exact(dhd()) ≈ exact rtol = 1e-6
+function _validate(dhd, reference;
+    iteration_limit, optimizer = HiGHS.Optimizer, kwargs...)
+    exact = _exact(reference(); optimizer)
+    @test _exact(dhd(); optimizer) ≈ exact rtol = 1e-6
     model = dhd()
     SDDP.train(model; iteration_limit, print_level = 0, kwargs...)
     @test SDDP.calculate_bound(model) ≈ exact rtol = 1e-6
     @test _policy_cost(model) ≈ exact rtol = 1e-6
     return exact
+end
+
+"Every sequence of noise terms over T stages, as `(node, noise)` pairs."
+function _all_paths(Ω, T)
+    return vec([collect(enumerate(ω)) for ω in Iterators.product(fill(Ω, T)...)])
 end
 
 function test_simple_hydro()
@@ -249,6 +256,126 @@ function test_portfolio_lp_below_exp()
     @test optima[1] <= optima[2] <= optima[3]
     @test optima[3] <= exp_value # Tangents are upper bounded by exact function.
     @test optima[3] ≈ exp_value rtol = 1e-3 # Close enough with fine tangents.
+    return
+end
+
+function test_portfolio_exp_last_node()
+    # With T = 1, the joint subproblem is the whole one-period problem, with no cuts.
+    Ω, P = Portfolio.gbm_returns(5)
+    model = Portfolio.portfolio_dhd(;
+        T = 1,
+        returns = (Ω, P),
+        tangents = nothing,
+        optimizer = Clarabel.Optimizer,
+        # Clarabel has limited accuracy so rtol below are large.
+    )
+    node = model[1]
+    m, U = Portfolio.one_period_optimum(Ω, P)
+    for X in -1.0:0.5:1.0
+        joint = SDDP.solve_joint_subproblem(
+            model,
+            node,
+            Dict(:x => X);
+            duality_handler = SDDP.ContinuousConicDuality(),
+        )
+        v = Portfolio.exact_value(1, m; w = X)
+        # The joint value is the exact one-period minimum.
+        @test joint.objective ≈ v rtol = 1e-6
+        # The commited holding is the same for every wealth.
+        @test only(values(joint.here_and_now)) ≈ only(U) rtol = 1e-3
+        # The dual of x.in is the slope of m exp(-ρ X) / ρ.
+        @test joint.duals[:x] ≈ -Portfolio.RHO * v rtol = 1e-4
+    end
+    @test SDDP.calculate_bound(model) ≈ Portfolio.exact_value(1, m) rtol = 1e-6
+    return
+end
+
+function test_portfolio_exp_deterministic_equivalent()
+    Ω, P = Portfolio.gbm_returns(5)
+    m, _ = Portfolio.one_period_optimum(Ω, P)
+    for T in 1:3, build in (Portfolio.portfolio_dhd, Portfolio.portfolio_dh_aug)
+        model = build(; T, returns = (Ω, P), tangents = nothing)
+        @test _exact(model; optimizer = Clarabel.Optimizer) ≈
+              Portfolio.exact_value(T, m) rtol = 1e-6
+    end
+    return
+end
+
+function test_portfolio_exp_train_default_sampling()
+    T = 3
+    Ω, P = Portfolio.gbm_returns(5)
+    m, _ = Portfolio.one_period_optimum(Ω, P)
+    exact = Portfolio.exact_value(T, m)
+    model = Portfolio.portfolio_dhd(;
+        T,
+        returns = (Ω, P),
+        tangents = nothing,
+        optimizer = Clarabel.Optimizer,
+    )
+    SDDP.train(model; iteration_limit = 50, print_level = 0)
+    # Every node's cost-to-go lies below the closed form.
+    for t in 1:T, X in -1.0:0.5:1.0
+        joint = SDDP.solve_joint_subproblem(
+            model,
+            model[t],
+            Dict(:x => X);
+            duality_handler = nothing,
+        )
+        @test joint.objective <= Portfolio.exact_value(T - t + 1, m; w = X) * (1 + 1e-6)
+    end
+    # The bound cannot exceed the optimum, and no policy can beat it.
+    bound, cost = SDDP.calculate_bound(model), _policy_cost(model)
+    @test bound <= exact * (1 + 1e-6)
+    @test cost >= exact * (1 + 1e-6)
+    # Training has made progress although random paths rarely reach the tails.
+    @test bound ≈ exact rtol = 1e-2
+    return
+end
+
+function test_portfolio_exp_train_historical_sampling()
+    T, n = 3, 3
+    Ω, P = Portfolio.gbm_returns(n)
+    m, _ = Portfolio.one_period_optimum(Ω, P)
+    # Forward pass goes through every path for better accuracy.
+    paths = _all_paths(Ω, T)
+    kwargs = (; T, returns = (Ω, P), tangents = nothing, optimizer = Clarabel.Optimizer)
+    exact = _validate(
+        () -> Portfolio.portfolio_dhd(; kwargs...),
+        () -> Portfolio.portfolio_dh_aug(; kwargs...);
+        iteration_limit = 5 * length(paths),
+        optimizer = Clarabel.Optimizer,
+        sampling_scheme = SDDP.Historical(paths),
+    )
+    @test exact ≈ Portfolio.exact_value(T, m) rtol = 1e-6
+    return
+end
+
+function test_portfolio_two_assets()
+    T = 2
+    returns = Portfolio.gbm_returns(
+        3;
+        μ = [0.08, 0.05],
+        σ = [0.2, 0.15],
+        C = [1.0 0.5; 0.5 1.0],
+    )
+    # Tangent loss: training finds the DH-aug optimum.
+    _validate(
+        () -> Portfolio.portfolio_dhd(; T, returns),
+        () -> Portfolio.portfolio_dh_aug(; T, returns);
+        iteration_limit = 300,
+    )
+    # Exponential_loss: trainig finds the DH-aug optimum, which is Newton's closed form.
+    m, _ = Portfolio.one_period_optimum(returns...)
+    paths = _all_paths(first(returns), T)
+    kwargs = (; T, returns, tangents = nothing, optimizer = Clarabel.Optimizer)
+    exact = _validate(
+        () -> Portfolio.portfolio_dhd(; kwargs...),
+        () -> Portfolio.portfolio_dh_aug(; kwargs...);
+        iteration_limit = 2 * length(paths),
+        optimizer = Clarabel.Optimizer,
+        sampling_scheme = SDDP.Historical(paths),
+    )
+    @test exact ≈ Portfolio.exact_value(T, m) rtol = 1e-6
     return
 end
 
