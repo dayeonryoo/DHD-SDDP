@@ -379,6 +379,72 @@ function test_portfolio_two_assets()
     return
 end
 
+function test_portfolio_out_of_sample()
+    # Recourse solve uses the observed (might be out-of-sample) noise.
+    T, n = 3, 3
+    μ, σ, Δt = only(Portfolio.MU), only(Portfolio.SIGMA), Portfolio.DT
+    Ω, _ = Portfolio.gbm_returns(n)
+    model = Portfolio.portfolio_dhd(; T, n) # Using tangent loss.
+    exact = _exact(model)
+    # 100 continuous lognormal returns per node, drawn once.
+    function lognormal_sampler()
+        return SDDP.OutOfSampleMonteCarlo(
+            model;
+            use_insample_transition = true
+        ) do node
+            return [
+                SDDP.Noise(
+                    [exp((μ - σ^2 / 2) * Δt + σ * sqrt(Δt) * randn()) - 1],
+                    0.01 # Probability.
+                ) for _ in 1:100
+            ]
+        end
+    end
+    # Forward passes on out-of-sample returns still give valid cuts because
+    # the backward pass still always uses the in-sample copies.
+    SDDP.train(
+        model;
+        iteration_limit = 100,
+        print_level = 0,
+        sampling_scheme = lognormal_sampler(),
+    )
+    bound = SDDP.calculate_bound(model)
+    @test bound <= exact * (1 + 1e-6)
+    @test bound ≈ exact rtol = 1e-2
+    for t in 1:T, X in -1.0:0.5:1.0
+        joint = SDDP.solve_joint_subproblem(
+            model,
+            model[t],
+            Dict(:x => X);
+            duality_handler = nothing,
+        )
+        V = _exact(Portfolio.portfolio_dhd(; T = T - t + 1, n, w = X))
+        @test joint.objective <= V * (1 + 1e-6)
+    end
+    # Simulate the policy on fresh returns that no joint subproblem has seen.
+    sims = SDDP.simulate(model, 20, [:x, :u]; sampling_scheme = lognormal_sampler())
+    for sim in sims
+        for s in sim
+            R, u, x = only(s[:noise_term]), only(s[:u]), s[:x]
+            @test s[:noise_term] ∉ Ω
+            # The holding is the joint decision at x.in, made before R is seen.
+            joint = SDDP.solve_joint_subproblem(
+                model,
+                model[s[:node_index]],
+                Dict(:x => x.in);
+                duality_handler = nothing,
+            )
+            @test u ≈ only(values(joint.here_and_now)) atol = 1e-9
+            # The recourse moves wealth with the realized return.
+            @test x.out ≈ x.in + R * u atol = 1e-9
+        end
+        # The terminal cost is the loss at the realized final wealth.
+        x_T = sim[end][:x].out
+        @test sim[end][:stage_objective] ≈ Portfolio.tangent_loss(-x_T) atol = 1e-9
+    end
+    return
+end
+
 end # module
 
 TestDHDValidation.runtests()
