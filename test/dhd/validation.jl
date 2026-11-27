@@ -4,6 +4,7 @@ using SDDP
 using Test
 import HiGHS
 import Clarabel
+import Random
 
 module Hydro
 include(joinpath(@__DIR__, "..", "..", "examples", "hydro_models.jl"))
@@ -442,6 +443,82 @@ function test_portfolio_out_of_sample()
         x_T = sim[end][:x].out
         @test sim[end][:stage_objective] ≈ Portfolio.tangent_loss(-x_T) atol = 1e-9
     end
+    return
+end
+
+"Train the exponential-loss portfolio and read its cuts into a new model."
+function _cut_file_models(T)
+    Ω, P = Portfolio.gbm_returns(5)
+    build() = Portfolio.portfolio_dhd(;
+        T,
+        returns = (Ω, P),
+        tangents = nothing,
+        optimizer = Clarabel.Optimizer
+    )
+    model = build()
+    Random.seed!(1)
+    # 20 iterations leave some cuts inactive at node 1.
+    SDDP.train(model; iteration_limit = 20, print_level = 0)
+    filename = tempname()
+    SDDP.write_cuts_to_file(model, filename)
+    new_model = build()
+    SDDP.read_cuts_from_file(new_model, filename)
+    rm(filename)
+    return model, new_model
+end
+
+function test_portfolio_exp_cut_file_round_trip()
+    T = 3
+    model, new_model = _cut_file_models(T)
+    # Objective of the joint subproblem at node t of model m from wealth X.
+    function joint_objective(m, t, X)
+        joint = SDDP.solve_joint_subproblem(
+            m,
+            m[t],
+            Dict(:x => X);
+            duality_handler = nothing,
+        )
+        return joint.objective
+    end
+    for t in 1:T
+        V = model[t].bellman_function.global_theta
+        new_V = new_model[t].bellman_function.global_theta
+        @test length(new_V.cuts) == length(V.cuts) # All cuts.
+        @test length(new_model[t].dhd.cut_constraints) == # Active cuts.
+              length(model[t].dhd.cut_constraints)
+        for X in -1.0:0.5:1.0
+            @test joint_objective(new_model, t, X) ≈
+                  joint_objective(model, t, X) rtol = 1e-6
+        end
+    end
+    @test SDDP.calculate_bound(new_model) ≈ SDDP.calculate_bound(model) rtol = 1e-6
+    return
+end
+
+function test_portfolio_exp_continue_from_cut_file()
+    model, new_model = _cut_file_models(3)
+    loaded_bound = SDDP.calculate_bound(new_model)
+    # The same seed makes both models sample the same paths.
+    Random.seed!(2)
+    SDDP.train( # Continuing the previously trained model.
+        model;
+        iteration_limit = 30,
+        print_level = 0,
+        add_to_existing_cuts = true,
+    )
+    Random.seed!(2)
+    SDDP.train( # Training a fresh model with loaded cuts.
+        new_model;
+        iteration_limit = 30,
+        print_level = 0,
+    )
+    log = model.most_recent_training_results.log
+    new_log = new_model.most_recent_training_results.log
+    for (l, new_l) in zip(log, new_log)
+        @test new_l.bound ≈ l.bound rtol = 1e-6
+    end
+    # Training starts from the loaded cuts, not from scratch.
+    @test new_log[1].bound >= loaded_bound * (1 - 1e-6)
     return
 end
 
